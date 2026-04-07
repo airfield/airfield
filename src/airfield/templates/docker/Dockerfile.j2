@@ -1,0 +1,10 @@
+FROM osrf/ros:{{ ros_distro }}-desktop
+
+# Airfield Convention: Install strict requirements
+RUN apt-get update && apt-get install -y \
+    python3-pip \
+    tmux \
+    && rm -rf /var/lib/apt/lists/*
+
+# Setup workspace
+WORKDIR /workspace
