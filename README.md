@@ -1,20 +1,299 @@
-# Airfield: The robotics orchestration framework
+# airfield
 
-## Setup
+Airfield is a package-centric robotics framework for structuring projects, declaring dependencies, and running reproducible package containers.
 
-Install [pipx](https://github.com/pypa/pipx?tab=readme-ov-file#install-pipx)
-
-Install airfield
+## Install
 
 ```bash
-pipx install git+https://github.com/airfield/airfield
+pipx install airfield
 ```
+
+Shell completion is managed by your shell startup files, so it cannot be fully auto-enabled by `pipx install` alone.
+Use this one-liner instead:
+
+```bash
+pipx install airfield && airfield --install-completion "$(basename "${SHELL:-bash}")"
+```
+
+If Airfield is already installed, add bash completion with:
+
+```bash
+airfield --install-completion "$(basename "${SHELL:-bash}")"
+```
+
+## Command model
+
+Airfield uses namespaced commands:
+
+- `airfield package ...` for package operations
+- `airfield project ...` for project operations
+- `airfield tools ...` for maintenance tasks
+- `airfield status` for context and runtime status
+- `airfield doctor` for system dependency checks
+
+Common lifecycle commands:
+
+- `airfield package init`
+- `airfield package deinit`
+- `airfield package shell`
+- `airfield package cmd`
+- `airfield project init`
+- `airfield project deinit`
+- `airfield tools system clean`
+- `airfield doctor`
+
+Unique prefixes are accepted when unambiguous.
+
+When Airfield detects the current directory is inside an Airfield project or package, it prints the detected context and defaults unknown top-level commands to the matching namespace:
+
+- inside a project: default namespace is `project`
+- inside a package: default namespace is `package`
+
+Examples from inside a project/package:
+
+- `airfield init` -> `airfield project init`
+- `airfield b --help` (inside a package) -> `airfield package build --help`
+
+Top-level legacy commands (`create`, `build`, `up`, `run`, `liftoff`) are intentionally removed.
+
+## Quick start
+
+### 1. Initialize a project
+
+```bash
+airfield project init ./my_robot --ros-distro jazzy
+```
+
+This creates:
+
+```text
+my_robot/
+	airfield.yaml
+	packages/
+	dependencies/
+		x86_64/
+		arm64/
+	plans/
+```
+
+`airfield.yaml` is the project marker used by all `package` and `project` commands.
+
+### 2. Initialize a new Airfield package
+
+From inside an Airfield project:
+
+```bash
+airfield package init nav_stack
+```
+
+This creates:
+
+```text
+packages/nav_stack/
+	airfield.yaml
+	src/
+```
+
+Standalone package initialization is also supported (no project required):
+
+```bash
+airfield package init .
+```
+
+This creates `airfield.yaml` and `src/` in the current directory.
+
+### 3. Wrap an existing ROS package in place
+
+```bash
+airfield package init --path /path/to/existing_ros_package --ros-distro jazzy
+```
+
+If `package.xml` exists in that path, Airfield adds:
+
+- `airfield.yaml` with inferred `name` and dependency list
+- `ros_distro` to select the ROS workspace base image (`noetic`, `humble`, or `jazzy`)
+- `AIRFIELD.md` with migration notes
+
+It does not rewrite existing ROS source files.
+
+### 4. Build a package image
+
+```bash
+airfield package build nav_stack --target-device x86_64
+```
+
+In a standalone package directory, package name is optional:
+
+```bash
+airfield package build --target-device x86_64
+```
+
+To show full Docker build logs for debugging:
+
+```bash
+airfield package build --target-device x86_64 --show-all-output
+```
+
+Standalone dependency manifests are resolved from:
+
+- `./dependencies/<target-device>/*.yaml`
+
+Airfield does not copy package source into image layers. It mounts `source_path` into the container at runtime.
+
+### 5. Run one package
+
+```bash
+airfield project run nav_stack
+```
+
+In a standalone package directory:
+
+```bash
+airfield project run
+```
+
+### 5b. Open shell in package container
+
+```bash
+airfield package shell
+```
+
+### 5c. Run command in package container
+
+```bash
+airfield package cmd -- ros2 pkg list
+```
+
+### 6. Run a plan
+
+```bash
+airfield project liftoff example
+```
+
+### 7. Generate tmuxinator session from a plan
+
+```bash
+airfield package up example --output .airfield/example.tmuxinator.yml
+```
+
+Add `--launch` to start tmuxinator immediately.
+
+### 8. Remove Airfield config from a package or project
+
+```bash
+airfield package deinit
+airfield project deinit
+```
+
+Both commands require confirmation by default. Use `--yes` to skip confirmation.
+Deinit also removes the package image and any containers created from it.
+
+### 9. Inspect current Airfield status
+
+```bash
+airfield status
+```
+
+This prints relevant project/package metadata, dependency resolution roots, and package container image/container state.
+
+### 10. Clean Airfield containers
+
+```bash
+airfield tools system clean
+```
+
+This removes all containers created from Airfield package images.
+
+### 11. Check Airfield system dependencies
+
+```bash
+airfield doctor
+```
+
+This checks required system dependencies (including Docker availability/daemon access)
+and shell completion configuration for the current shell.
+It also reports GPU accelerator diagnostics:
+
+- detected NVIDIA GPU hardware (if present)
+- CUDA toolkit version (if present)
+- PyTorch installation/version
+- whether PyTorch can allocate and compute on GPU
+
+When run inside a container, `airfield doctor` downgrades engine availability failures
+to warnings (instead of hard failures) and reports whether `docker` maps to another
+backend such as Podman, Singularity, or Apptainer.
+
+Use `--fix` to auto-apply supported fixes (currently shell completion setup):
+
+```bash
+airfield doctor --fix
+```
+
+## Package metadata
+
+Example package `airfield.yaml`:
+
+```yaml
+name: nav_stack
+ros_distro: jazzy
+dependencies:
+	- ros_base>=1.3,<2.0
+	- cv_bridge==3.2.1
+source_path: src
+```
+
+- `dependencies` are resolved from `dependencies/<target_device>/*.yaml`
+- `source_path` is relative to the package directory
+- `ros_distro` selects the ROS base image and workspace overlay
+- for wrapped ROS packages, `source_path` is usually `.`
+
+Dependency policy:
+
+- Airfield preserves semantic version constraints in `airfield.yaml` (for example `name>=1.2,<2.0`)
+- exact pins (`name==x.y.z`) are treated as lock values and are exported into dependency installers
+- dependency manifests should support semantic version locking so package builds are reproducible across devices
+
+Host dependency policy for accelerated packages:
+
+- dependency manifests can declare `host_dependencies` separately from in-container install commands
+- Airfield auto-detects NVIDIA GPU and NVIDIA driver version before build
+- if required host dependencies are missing or outdated, Airfield prints install/upgrade guidance and prompts before continuing
+- in non-interactive mode, Airfield auto-selects safe defaults (for example CPU install path)
+- CUDA runtime/toolkit dependencies can be declared as normal dependencies and installed inside the container
+
+Local-only runtime options should go in `.air` (gitignored), not `airfield.yaml`.
+
+Example package `.air`:
+
+```yaml
+mounts:
+	- /robodata/speedway
+```
+
+- `mounts` adds host directory mounts at the same in-container path
+- both `<project>/.air` and `<package>/.air` are supported; package mounts are appended after project mounts
+
+## Project plan metadata
+
+Example `plans/example.yaml`:
+
+```yaml
+name: example
+packages:
+	- nav_stack
+	- perception
+```
+
+## Notes
+
+- Run commands from inside an Airfield project or one of its subdirectories.
+- `airfield project run` currently starts an interactive container shell for the selected package image.
+
 
 ## Development
 
-For local development, install this package in editable mode with pipx
+To install the current Airfield code for development, check out the repo and run:
 
-```
+```bash
 pipx install --editable .
 ```
-

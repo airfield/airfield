@@ -1,0 +1,9 @@
+name: {{ plan_name }}
+root: .
+
+windows:
+{% for pkg in packages %}
+	- {{ pkg }}:
+			panes:
+				- airfield proj run {{ pkg }}
+{% endfor %}

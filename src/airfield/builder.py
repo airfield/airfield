@@ -1,0 +1,224 @@
+import os
+import pwd
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+from typing import List, Optional, Tuple
+
+from airfield.models import Dependency, Package
+
+
+ROS_BASE_IMAGES = {
+    "noetic": "ros:noetic-ros-base",
+    "humble": "osrf/ros:humble-desktop",
+    "jazzy": "osrf/ros:jazzy-desktop",
+}
+
+ROS_CORE_PACKAGES = {
+    "noetic": ["python3-catkin-tools"],
+    "humble": ["python3-colcon-common-extensions"],
+    "jazzy": ["python3-colcon-common-extensions"],
+}
+
+
+class Builder:
+    def __init__(self, package: Package, dependencies: List[Dependency], target_device: str):
+        self.package = package
+        self.dependencies = dependencies
+        self.target_device = target_device
+        self.ros_distro = self._resolve_ros_distro()
+        self.base_image = ROS_BASE_IMAGES[self.ros_distro]
+
+    def _resolve_ros_distro(self) -> str:
+        ros_distro = (self.package.ros_distro or "jazzy").strip().lower()
+        if ros_distro not in ROS_BASE_IMAGES:
+            raise ValueError(
+                f"Unsupported ROS distribution '{ros_distro}'. Supported values: {', '.join(sorted(ROS_BASE_IMAGES))}"
+            )
+        return ros_distro
+
+    def _find_airfield_repo(self, context_dir: Path) -> Optional[Path]:
+        for candidate in [context_dir, *context_dir.parents]:
+            repo_root = candidate / "airfield"
+            if (repo_root / "pyproject.toml").exists() and (repo_root / "src" / "airfield").exists():
+                return repo_root
+        return None
+
+    def generate_dockerfile(self, install_local_airfield: bool = False) -> str:
+        lines = []
+        default_uid = os.getuid()
+        default_gid = os.getgid()
+        default_username = pwd.getpwuid(default_uid).pw_name
+        lines.append(f"FROM {self.base_image}")
+        lines.append("USER root")
+        lines.append("ENV DEBIAN_FRONTEND=noninteractive")
+        lines.append(f"ENV ROS_DISTRO={self.ros_distro}")
+        lines.append("ARG TORCH_INSTALL_TARGET=cpu")
+        lines.append("ARG TORCH_VERSION=")
+        lines.append("ARG TORCH_GPU_WHL_TAG=cu121")
+        lines.append(
+            "RUN apt-get update && apt-get install -y python3-pip python3-opencv git zsh "
+            + " ".join(ROS_CORE_PACKAGES[self.ros_distro])
+            + " && rm -rf /var/lib/apt/lists/*"
+        )
+
+        if install_local_airfield:
+            lines.append("COPY airfield /opt/airfield")
+            lines.append(
+                "RUN python3 -m pip install --no-cache-dir /opt/airfield || "
+                "python3 -m pip install --no-cache-dir --break-system-packages /opt/airfield"
+            )
+        else:
+            lines.append(
+                "RUN python3 -m pip install --no-cache-dir airfield || "
+                "python3 -m pip install --no-cache-dir --break-system-packages airfield"
+            )
+
+        system_cmds = []
+        for dep in self.dependencies:
+            system_cmds.extend(dep.system)
+
+        if system_cmds:
+            for cmd in system_cmds:
+                lines.append(f"RUN {cmd}")
+
+        lines.append(f"ARG USERNAME={default_username}")
+        lines.append(f"ARG UID={default_uid}")
+        lines.append(f"ARG GID={default_gid}")
+        lines.append(
+            "RUN set -e && "
+            "(getent group $GID || groupadd -g $GID $USERNAME) >/dev/null && "
+            "if id -u $UID >/dev/null 2>&1; then "
+            "existing_user=$(id -nu $UID) && "
+            "usermod -l $USERNAME -d /home/$USERNAME -m $existing_user 2>/dev/null || true && "
+            "usermod -g $GID $USERNAME 2>/dev/null || true; "
+            "else "
+            "useradd --uid $UID --gid $GID -m $USERNAME; "
+            "fi"
+        )
+        lines.append("RUN usermod -s /bin/zsh $USERNAME")
+        lines.append("RUN git config --system --add safe.directory '*'")
+        lines.append(
+            "RUN git clone --depth=1 https://github.com/ohmyzsh/ohmyzsh.git /home/$USERNAME/.oh-my-zsh && "
+            "cp /home/$USERNAME/.oh-my-zsh/templates/zshrc.zsh-template /home/$USERNAME/.zshrc && "
+            "chown -R $UID:$GID /home/$USERNAME/.oh-my-zsh /home/$USERNAME/.zshrc"
+        )
+        lines.append("RUN mkdir -p /home/$USERNAME/workspace/src && chown -R $UID:$GID /home/$USERNAME")
+        lines.append(
+            "RUN printf '%s\\n' 'source /opt/ros/$ROS_DISTRO/setup.bash' >> /home/$USERNAME/.bashrc && "
+            "printf '%s\\n' 'if [ -f /home/$USERNAME/workspace/install/setup.bash ]; then source /home/$USERNAME/workspace/install/setup.bash; fi' >> /home/$USERNAME/.bashrc && "
+            "printf '%s\\n' 'colcon_build() { colcon build \"$@\"; }' >> /home/$USERNAME/.bashrc"
+        )
+        lines.append(
+            "RUN printf '%s\\n' 'source /opt/ros/$ROS_DISTRO/setup.zsh' >> /home/$USERNAME/.zshrc && "
+            "printf '%s\\n' 'if [ -f /home/$USERNAME/workspace/install/setup.zsh ]; then source /home/$USERNAME/workspace/install/setup.zsh; fi' >> /home/$USERNAME/.zshrc && "
+            "printf '%s\\n' 'colcon_build() { colcon build \"$@\"; }' >> /home/$USERNAME/.zshrc"
+        )
+
+        lines.append("USER $USERNAME")
+        lines.append("ENV HOME=/home/$USERNAME")
+        lines.append("WORKDIR /home/$USERNAME/workspace")
+
+        user_cmds = []
+        for dep in self.dependencies:
+            user_cmds.extend(dep.user)
+
+        if user_cmds:
+            for cmd in user_cmds:
+                lines.append(f"RUN {cmd}")
+
+        return "\n".join(lines)
+
+    def build(self, context_dir: Path, show_all_output: bool = False) -> Tuple[bool, str]:
+        image_name = f"airfield-pkg-{self.package.name}:latest"
+
+        with tempfile.TemporaryDirectory() as td:
+            build_root = Path(td)
+            airfield_repo = self._find_airfield_repo(context_dir)
+            if airfield_repo is not None:
+                shutil.copytree(
+                    airfield_repo,
+                    build_root / "airfield",
+                    ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc", "build", "dist", "*.egg-info"),
+                )
+
+            dockerfile_content = self.generate_dockerfile(install_local_airfield=airfield_repo is not None)
+            df_path = build_root / "Dockerfile"
+            df_path.write_text(dockerfile_content, encoding="utf-8")
+
+            uid = str(os.getuid())
+            gid = str(os.getgid())
+            username = pwd.getpwuid(os.getuid()).pw_name
+
+            cmd = [
+                "docker", "build",
+                "--build-arg", f"UID={uid}",
+                "--build-arg", f"GID={gid}",
+                "--build-arg", f"USERNAME={username}",
+                "-t", image_name,
+                "-f", str(df_path),
+                str(build_root),
+            ]
+
+            torch_build_args = [
+                ("TORCH_INSTALL_TARGET", "AIRFIELD_TORCH_INSTALL_TARGET"),
+                ("TORCH_VERSION", "AIRFIELD_TORCH_VERSION"),
+                ("TORCH_GPU_WHL_TAG", "AIRFIELD_TORCH_GPU_WHL_TAG"),
+            ]
+            for docker_arg, preferred_host_env in torch_build_args:
+                value = os.environ.get(preferred_host_env)
+                if value is None:
+                    value = os.environ.get(docker_arg)
+                if value:
+                    cmd.extend(["--build-arg", f"{docker_arg}={value}"])
+
+            print(f"Executing: {' '.join(cmd)}")
+            print("--- Dockerfile ---")
+            print(dockerfile_content)
+            print("------------------")
+
+            print("Container is building. This can take a few minutes...")
+            if show_all_output:
+                result = subprocess.run(cmd, cwd=str(context_dir), text=True)
+            else:
+                result = self._run_with_loading_indicator(cmd=cmd, cwd=str(context_dir))
+            if result.returncode != 0:
+                if not show_all_output:
+                    print(result.stdout)
+                    print(result.stderr)
+                return False, image_name
+
+            return True, image_name
+
+    def _run_with_loading_indicator(self, cmd: List[str], cwd: str) -> subprocess.CompletedProcess:
+        process = subprocess.Popen(
+            cmd,
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        spinner = "|/-\\"
+        idx = 0
+        last_non_tty_update = 0.0
+        while process.poll() is None:
+            if sys.stdout.isatty():
+                frame = spinner[idx % len(spinner)]
+                print(f"\rContainer is building... {frame}", end="", flush=True)
+                idx += 1
+            else:
+                now = time.monotonic()
+                if now - last_non_tty_update >= 5.0:
+                    print("Container is building...")
+                    last_non_tty_update = now
+            time.sleep(0.15)
+
+        if sys.stdout.isatty():
+            print("\rContainer build finished.     ")
+
+        stdout, stderr = process.communicate()
+        return subprocess.CompletedProcess(cmd, process.returncode, stdout=stdout, stderr=stderr)
