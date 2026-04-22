@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from airfield.models import Dependency, Package
+from airfield.docker_cache import get_cache_optimization_comment
 
 
 ROS_BASE_IMAGES = {
@@ -47,11 +48,43 @@ class Builder:
                 return repo_root
         return None
 
-    def generate_dockerfile(self, install_local_airfield: bool = False) -> str:
+    def _supports_cache_mounts(self) -> bool:
+        # Manual override for troubleshooting/CI:
+        # AIRFIELD_FORCE_DOCKER_CACHE_MOUNTS=1 -> enable
+        # AIRFIELD_DISABLE_DOCKER_CACHE_MOUNTS=1 -> disable
+        force = (os.environ.get("AIRFIELD_FORCE_DOCKER_CACHE_MOUNTS") or "").strip().lower()
+        if force in {"1", "true", "yes", "on"}:
+            return True
+
+        disable = (os.environ.get("AIRFIELD_DISABLE_DOCKER_CACHE_MOUNTS") or "").strip().lower()
+        if disable in {"1", "true", "yes", "on"}:
+            return False
+
+        try:
+            result = subprocess.run(
+                ["docker", "--version"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except FileNotFoundError:
+            return False
+
+        version_text = f"{result.stdout}\n{result.stderr}".lower()
+        if "podman" in version_text or "buildah" in version_text:
+            return False
+        return True
+
+    def generate_dockerfile(self, install_local_airfield: bool = False, cache_mounts_enabled: bool = True) -> str:
         lines = []
         default_uid = os.getuid()
         default_gid = os.getgid()
         default_username = pwd.getpwuid(default_uid).pw_name
+        
+        # Add optimization comment at the top
+        lines.append(get_cache_optimization_comment(cache_mounts_enabled=cache_mounts_enabled))
+        lines.append("")
+        
         lines.append(f"FROM {self.base_image}")
         lines.append("USER root")
         lines.append("ENV DEBIAN_FRONTEND=noninteractive")
@@ -59,23 +92,47 @@ class Builder:
         lines.append("ARG TORCH_INSTALL_TARGET=cpu")
         lines.append("ARG TORCH_VERSION=")
         lines.append("ARG TORCH_GPU_WHL_TAG=cu121")
-        lines.append(
-            "RUN apt-get update && apt-get install -y python3-pip python3-opencv git zsh "
+        
+        # Optimized apt-get with BuildKit cache mounts
+        apt_install = (
+            "apt-get update && apt-get install -y python3-pip python3-opencv git zsh "
             + " ".join(ROS_CORE_PACKAGES[self.ros_distro])
             + " && rm -rf /var/lib/apt/lists/*"
         )
+        if cache_mounts_enabled:
+            lines.append(
+                "RUN --mount=type=cache,target=/var/lib/apt,sharing=locked \\\n"
+                "    --mount=type=cache,target=/var/cache/apt,sharing=locked \\\n"
+                f"    {apt_install}"
+            )
+        else:
+            lines.append(f"RUN {apt_install}")
 
         if install_local_airfield:
             lines.append("COPY airfield /opt/airfield")
-            lines.append(
-                "RUN python3 -m pip install --no-cache-dir /opt/airfield || "
-                "python3 -m pip install --no-cache-dir --break-system-packages /opt/airfield"
-            )
+            if cache_mounts_enabled:
+                lines.append(
+                    "RUN --mount=type=cache,target=/root/.cache/pip \\\n"
+                    "    python3 -m pip install --no-cache-dir /opt/airfield || \\\n"
+                    "    python3 -m pip install --no-cache-dir --break-system-packages /opt/airfield"
+                )
+            else:
+                lines.append(
+                    "RUN python3 -m pip install --no-cache-dir /opt/airfield || "
+                    "python3 -m pip install --no-cache-dir --break-system-packages /opt/airfield"
+                )
         else:
-            lines.append(
-                "RUN python3 -m pip install --no-cache-dir airfield || "
-                "python3 -m pip install --no-cache-dir --break-system-packages airfield"
-            )
+            if cache_mounts_enabled:
+                lines.append(
+                    "RUN --mount=type=cache,target=/root/.cache/pip \\\n"
+                    "    python3 -m pip install --no-cache-dir airfield || \\\n"
+                    "    python3 -m pip install --no-cache-dir --break-system-packages airfield"
+                )
+            else:
+                lines.append(
+                    "RUN python3 -m pip install --no-cache-dir airfield || "
+                    "python3 -m pip install --no-cache-dir --break-system-packages airfield"
+                )
 
         system_cmds = []
         for dep in self.dependencies:
@@ -83,7 +140,16 @@ class Builder:
 
         if system_cmds:
             for cmd in system_cmds:
-                lines.append(f"RUN {cmd}")
+                # Optimize apt-get commands in system dependencies
+                if cmd.startswith("apt-get") or "apt-get" in cmd:
+                    if "apt-get update" in cmd and cache_mounts_enabled:
+                        lines.append(f"RUN --mount=type=cache,target=/var/lib/apt,sharing=locked \\\n    --mount=type=cache,target=/var/cache/apt,sharing=locked \\\n    {cmd}")
+                    else:
+                        lines.append(f"RUN {cmd}")
+                elif "pip" in cmd and "install" in cmd and cache_mounts_enabled:
+                    lines.append(f"RUN --mount=type=cache,target=/root/.cache/pip \\\n    {cmd}")
+                else:
+                    lines.append(f"RUN {cmd}")
 
         lines.append(f"ARG USERNAME={default_username}")
         lines.append(f"ARG UID={default_uid}")
@@ -128,7 +194,11 @@ class Builder:
 
         if user_cmds:
             for cmd in user_cmds:
-                lines.append(f"RUN {cmd}")
+                # Optimize pip commands in user dependencies
+                if "pip" in cmd and "install" in cmd and cache_mounts_enabled:
+                    lines.append(f"RUN --mount=type=cache,target=/home/$USERNAME/.cache/pip \\\n    {cmd}")
+                else:
+                    lines.append(f"RUN {cmd}")
 
         return "\n".join(lines)
 
@@ -137,6 +207,7 @@ class Builder:
 
         with tempfile.TemporaryDirectory() as td:
             build_root = Path(td)
+            cache_mounts_enabled = self._supports_cache_mounts()
             airfield_repo = self._find_airfield_repo(context_dir)
             if airfield_repo is not None:
                 shutil.copytree(
@@ -145,7 +216,10 @@ class Builder:
                     ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc", "build", "dist", "*.egg-info"),
                 )
 
-            dockerfile_content = self.generate_dockerfile(install_local_airfield=airfield_repo is not None)
+            dockerfile_content = self.generate_dockerfile(
+                install_local_airfield=airfield_repo is not None,
+                cache_mounts_enabled=cache_mounts_enabled,
+            )
             df_path = build_root / "Dockerfile"
             df_path.write_text(dockerfile_content, encoding="utf-8")
 
@@ -175,16 +249,51 @@ class Builder:
                 if value:
                     cmd.extend(["--build-arg", f"{docker_arg}={value}"])
 
+            # Enable BuildKit for optimized caching
+            env = os.environ.copy()
+            env["DOCKER_BUILDKIT"] = "1"
+
             print(f"Executing: {' '.join(cmd)}")
             print("--- Dockerfile ---")
             print(dockerfile_content)
             print("------------------")
 
             print("Container is building. This can take a few minutes...")
-            if show_all_output:
-                result = subprocess.run(cmd, cwd=str(context_dir), text=True)
+            if cache_mounts_enabled:
+                print("(BuildKit cache mounts enabled for optimized rebuilds)")
             else:
-                result = self._run_with_loading_indicator(cmd=cmd, cwd=str(context_dir))
+                print("(Cache mounts disabled for this engine; using compatibility mode)")
+            if show_all_output:
+                result = subprocess.run(cmd, cwd=str(context_dir), text=True, env=env, capture_output=True)
+                if result.stdout:
+                    print(result.stdout)
+                if result.stderr:
+                    print(result.stderr)
+            else:
+                result = self._run_with_loading_indicator(cmd=cmd, cwd=str(context_dir), env=env)
+
+            if result.returncode != 0 and cache_mounts_enabled:
+                stderr_text = (result.stderr or "").lower()
+                stdout_text = (result.stdout or "").lower()
+                if "invalid mount type \"cache\"" in stderr_text or "invalid mount type \"cache\"" in stdout_text:
+                    print("Build engine rejected cache mounts. Retrying in compatibility mode...")
+                    dockerfile_content = self.generate_dockerfile(
+                        install_local_airfield=airfield_repo is not None,
+                        cache_mounts_enabled=False,
+                    )
+                    df_path.write_text(dockerfile_content, encoding="utf-8")
+                    print("--- Dockerfile (compatibility mode) ---")
+                    print(dockerfile_content)
+                    print("----------------------------------------")
+                    if show_all_output:
+                        result = subprocess.run(cmd, cwd=str(context_dir), text=True, env=env, capture_output=True)
+                        if result.stdout:
+                            print(result.stdout)
+                        if result.stderr:
+                            print(result.stderr)
+                    else:
+                        result = self._run_with_loading_indicator(cmd=cmd, cwd=str(context_dir), env=env)
+
             if result.returncode != 0:
                 if not show_all_output:
                     print(result.stdout)
@@ -193,13 +302,14 @@ class Builder:
 
             return True, image_name
 
-    def _run_with_loading_indicator(self, cmd: List[str], cwd: str) -> subprocess.CompletedProcess:
+    def _run_with_loading_indicator(self, cmd: List[str], cwd: str, env=None) -> subprocess.CompletedProcess:
         process = subprocess.Popen(
             cmd,
             cwd=cwd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            env=env,
         )
 
         spinner = "|/-\\"

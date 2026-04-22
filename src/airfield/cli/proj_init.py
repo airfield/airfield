@@ -6,6 +6,7 @@ from rich.console import Console
 
 from airfield.config import AIRFIELD_CONFIG, LEGACY_PROJECT_MARKER
 from airfield.models import SUPPORTED_ROS_DISTROS
+from airfield.docker_cache import generate_dockerignore
 
 console = Console()
 
@@ -91,5 +92,8 @@ def run(
     )
 
     _ensure_gitignore_entry(project_root, ".air")
+
+    # Generate .dockerignore for optimized container builds
+    generate_dockerignore(project_root)
 
     console.print(f"[bold green]Initialized Airfield project at {project_root}[/bold green]")

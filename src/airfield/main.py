@@ -3,7 +3,7 @@ import typer
 from rich.console import Console
 from typer.core import TyperGroup
 
-from airfield.cli import build, doctor, liftoff, pkg_cmd, pkg_deinit, pkg_init, pkg_shell, proj_deinit, proj_init, run, status, up
+from airfield.cli import build, doctor, docker_cache_cmd, liftoff, pkg_cmd, pkg_deinit, pkg_init, pkg_shell, proj_deinit, proj_init, run, status, up
 from airfield.cli import tools_system
 from airfield.config import find_package_root, find_project_root
 
@@ -118,11 +118,13 @@ pkg_app = typer.Typer(help="Package operations", cls=PrefixGroup, invoke_without
 proj_app = typer.Typer(help="Project operations", cls=PrefixGroup, invoke_without_command=True)
 tools_app = typer.Typer(help="System tools", cls=PrefixGroup, invoke_without_command=True)
 tools_system_app = typer.Typer(help="System maintenance", cls=PrefixGroup, invoke_without_command=True)
+docker_app = typer.Typer(help="Docker build optimization", cls=PrefixGroup, invoke_without_command=True)
 
 app.add_typer(pkg_app, name="package")
 app.add_typer(proj_app, name="project")
 app.add_typer(tools_app, name="tools")
 tools_app.add_typer(tools_system_app, name="system")
+app.add_typer(docker_app, name="docker")
 
 pkg_app.command(name="init")(pkg_init.run)
 pkg_app.command(name="deinit")(pkg_deinit.run)
@@ -137,6 +139,8 @@ proj_app.command(name="run")(run.run)
 proj_app.command(name="liftoff")(liftoff.run)
 
 tools_system_app.command(name="clean")(tools_system.run)
+
+docker_app.command(name="cache")(docker_cache_cmd.run)
 
 app.command(name="status")(status.run)
 app.command(name="doctor")(doctor.run)
@@ -165,6 +169,13 @@ def tools_main(ctx: typer.Context):
 
 @tools_system_app.callback(invoke_without_command=True)
 def tools_system_main(ctx: typer.Context):
+    if ctx.invoked_subcommand is None:
+        console.print(ctx.get_help())
+        raise typer.Exit()
+
+
+@docker_app.callback(invoke_without_command=True)
+def docker_main(ctx: typer.Context):
     if ctx.invoked_subcommand is None:
         console.print(ctx.get_help())
         raise typer.Exit()

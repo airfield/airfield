@@ -8,6 +8,7 @@ from rich.console import Console
 
 from airfield.config import AIRFIELD_CONFIG, LEGACY_PACKAGE_MARKER, find_project_root, packages_dir
 from airfield.models import SUPPORTED_ROS_DISTROS
+from airfield.docker_cache import generate_dockerignore
 
 console = Console()
 
@@ -121,6 +122,9 @@ def _init_new_package(name: str, force: bool, ros_distro: str) -> None:
 
     _ensure_gitignore_entry(pkg_dir, ".air")
 
+    # Generate .dockerignore for optimized container builds
+    generate_dockerignore(pkg_dir)
+
     console.print(f"[bold green]Initialized Airfield package {package_name} at {pkg_dir}[/bold green]")
 
 
@@ -156,6 +160,9 @@ def _wrap_existing_ros_package(path: Path, force: bool, ros_distro: str) -> None
         )
 
     _ensure_gitignore_entry(pkg_dir, ".air")
+
+    # Generate .dockerignore for optimized container builds
+    generate_dockerignore(pkg_dir)
 
     console.print(f"[bold green]Wrapped existing ROS package at {pkg_dir}[/bold green]")
 
