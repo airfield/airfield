@@ -6,8 +6,10 @@ import typer
 
 from airfield.cli.package_exec import (
     build_package_image,
+    container_workdir,
     docker_mount_args,
     gpu_runtime_args,
+    in_airfield_container,
     resolve_package_context,
 )
 
@@ -23,6 +25,12 @@ def run(
     target_device: str = typer.Option("x86_64", "--target-device", help="Target architecture for dependency resolution"),
 ):
     """Run a command directly in the package container with source mounted."""
+    if in_airfield_container():
+        raise typer.BadParameter(
+            "Already inside an Airfield container. "
+            "Use the command directly on the host shell instead."
+        )
+
     print(f"Loading package {package_name or '(auto)'}...")
     pkg_dir, pkg, deps, source_root = resolve_package_context(package_name, target_device=target_device)
     image_name = build_package_image(pkg_dir, pkg, deps, target_device=target_device)
@@ -34,8 +42,10 @@ def run(
 
     run_cmd = [
         "docker", "run", "--rm",
+        "--group-add", "0",
         "--ipc=host", "--network=host",
         *mount_args,
+        "-w", container_workdir(pkg),
         *runtime_gpu_args,
         image_name,
         "/bin/bash", "-lc", command_text,

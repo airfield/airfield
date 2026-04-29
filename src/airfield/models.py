@@ -1,5 +1,5 @@
-import yaml
 import re
+import yaml
 from pathlib import Path
 from typing import Dict, List, Optional
 from pydantic import BaseModel, Field
@@ -66,6 +66,8 @@ class Package(BaseModel):
     dependency_constraints: Dict[str, str] = Field(default_factory=dict)
     source_path: str = "src"
     ros_distro: Optional[str] = None
+    default_workdir: Optional[str] = None
+    run: Dict[str, str] = Field(default_factory=dict)
     
     @classmethod
     def load(cls, path: Path) -> "Package":
@@ -87,6 +89,27 @@ class Package(BaseModel):
         ros_distro = data.get("ros_distro")
         if isinstance(ros_distro, str):
             data["ros_distro"] = ros_distro.strip().lower() or None
+
+        raw_run = data.get("run", {})
+        if raw_run is None:
+            raw_run = {}
+        if not isinstance(raw_run, dict):
+            raise ValueError("'run' must be a mapping of run-name to command string")
+
+        cleaned_run: Dict[str, str] = {}
+        for raw_name, raw_command in raw_run.items():
+            name = str(raw_name).strip()
+            command = str(raw_command).strip()
+            if not name:
+                raise ValueError("Run command names must be non-empty strings")
+            if not command:
+                raise ValueError(f"Run command '{name}' must have a non-empty command string")
+            cleaned_run[name] = command
+        data["run"] = cleaned_run
+
+        raw_default_workdir = data.get("default_workdir")
+        if isinstance(raw_default_workdir, str):
+            data["default_workdir"] = raw_default_workdir.strip() or None
         return cls(**data)
 
 class Plan(BaseModel):

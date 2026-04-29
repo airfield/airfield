@@ -3,7 +3,7 @@ import typer
 from rich.console import Console
 from typer.core import TyperGroup
 
-from airfield.cli import build, doctor, docker_cache_cmd, liftoff, pkg_cmd, pkg_deinit, pkg_init, pkg_shell, proj_deinit, proj_init, run, status, up
+from airfield.cli import build, doctor, docker_cache_cmd, liftoff, pkg_cmd, pkg_deinit, pkg_init, pkg_run, pkg_shell, proj_deinit, proj_init, run, status, up
 from airfield.cli import tools_system
 from airfield.config import find_package_root, find_project_root
 
@@ -131,6 +131,7 @@ pkg_app.command(name="deinit")(pkg_deinit.run)
 pkg_app.command(name="build")(build.run)
 pkg_app.command(name="shell")(pkg_shell.run)
 pkg_app.command(name="cmd")(pkg_cmd.run)
+pkg_app.command(name="run")(pkg_run.run)
 pkg_app.command(name="up")(up.run)
 
 proj_app.command(name="init")(proj_init.run)

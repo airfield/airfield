@@ -4,6 +4,7 @@ from typing import Optional
 
 from airfield.cli.package_exec import (
     build_package_image,
+    container_workdir,
     docker_mount_args,
     gpu_runtime_args,
     resolve_package_context,
@@ -22,8 +23,10 @@ def run(
     runtime_gpu_args = gpu_runtime_args()
     run_cmd = [
         "docker", "run", "-it", "--rm",
+        "--group-add", "0",
         "--ipc=host", "--network=host",
         *mount_args,
+        "-w", container_workdir(pkg),
         *runtime_gpu_args,
         image_name,
         "/bin/bash"

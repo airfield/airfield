@@ -1,4 +1,5 @@
 import os
+import posixpath
 import pwd
 import re
 import glob
@@ -96,7 +97,9 @@ def resolve_package_context(
         if dep_path.exists():
             deps.append(Dependency.load(dep_path))
         else:
-            print(f"Warning: Dependency {dep_name} not found at {dep_path}")
+            print(f"Error: Dependency '{dep_name}' manifest not found at {dep_path}")
+            print(f"Each dependency listed in airfield.yaml must have a corresponding .yaml manifest.")
+            raise typer.Exit(1)
 
     return pkg_dir, pkg, deps, source_root
 
@@ -219,6 +222,18 @@ def container_source_mount_path(package_name: str) -> str:
     return f"/home/{username}/workspace/src/{package_name}"
 
 
+def container_workdir(pkg: Package) -> str:
+    """Resolve the default in-container working directory for a package run/shell."""
+    source_mount = container_source_mount_path(pkg.name)
+    raw = (pkg.default_workdir or ".").strip()
+
+    if raw in {"", ".", "./"}:
+        return source_mount
+    if raw.startswith("/"):
+        return raw
+    return posixpath.normpath(f"{source_mount}/{raw}")
+
+
 def _read_local_mounts(config_path: Path) -> List[str]:
     if not config_path.exists():
         return []
@@ -256,6 +271,11 @@ def _configured_mounts(pkg_dir: Path) -> List[str]:
         mounts.extend(_read_local_mounts(project_root / AIRFIELD_LOCAL_CONFIG))
     mounts.extend(_read_local_mounts(pkg_dir / AIRFIELD_LOCAL_CONFIG))
     return mounts
+
+
+def in_airfield_container() -> bool:
+    """Check if currently running inside an Airfield-built container."""
+    return os.environ.get("IN_AIRFIELD_CONTAINER") == "1"
 
 
 def docker_mount_args(pkg_dir: Path, pkg: Package, source_root: Path) -> List[str]:

@@ -2,7 +2,7 @@ from typing import Optional
 
 import typer
 
-from airfield.cli.package_exec import build_package_image, resolve_package_context
+from airfield.cli.package_exec import build_package_image, in_airfield_container, resolve_package_context
 
 
 def run(
@@ -11,6 +11,13 @@ def run(
     show_all_output: bool = typer.Option(False, "--show-all-output", help="Show full Docker build output for debugging"),
 ):
     """Build a package container image."""
+    if in_airfield_container():
+        raise typer.BadParameter(
+            "Already inside an Airfield container. "
+            "You cannot build a new image from inside a container. "
+            "Exit to the host and retry."
+        )
+
     pkg_dir, pkg, deps, _ = resolve_package_context(package_name, target_device=target_device)
     image_name = build_package_image(
         pkg_dir,

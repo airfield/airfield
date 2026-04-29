@@ -176,12 +176,12 @@ class Builder:
         lines.append(
             "RUN printf '%s\\n' 'source /opt/ros/$ROS_DISTRO/setup.bash' >> /home/$USERNAME/.bashrc && "
             "printf '%s\\n' 'if [ -f /home/$USERNAME/workspace/install/setup.bash ]; then source /home/$USERNAME/workspace/install/setup.bash; fi' >> /home/$USERNAME/.bashrc && "
-            "printf '%s\\n' 'colcon_build() { colcon build \"$@\"; }' >> /home/$USERNAME/.bashrc"
+            "printf '%s\\n' 'colcon_build() { mkdir -p log && colcon build \"$@\"; }' >> /home/$USERNAME/.bashrc"
         )
         lines.append(
             "RUN printf '%s\\n' 'source /opt/ros/$ROS_DISTRO/setup.zsh' >> /home/$USERNAME/.zshrc && "
             "printf '%s\\n' 'if [ -f /home/$USERNAME/workspace/install/setup.zsh ]; then source /home/$USERNAME/workspace/install/setup.zsh; fi' >> /home/$USERNAME/.zshrc && "
-            "printf '%s\\n' 'colcon_build() { colcon build \"$@\"; }' >> /home/$USERNAME/.zshrc"
+            "printf '%s\\n' 'colcon_build() { mkdir -p log && colcon build \"$@\"; }' >> /home/$USERNAME/.zshrc"
         )
 
         lines.append("USER $USERNAME")
@@ -199,6 +199,8 @@ class Builder:
                     lines.append(f"RUN --mount=type=cache,target=/home/$USERNAME/.cache/pip \\\n    {cmd}")
                 else:
                     lines.append(f"RUN {cmd}")
+
+        lines.append("ENV IN_AIRFIELD_CONTAINER=1")
 
         return "\n".join(lines)
 
