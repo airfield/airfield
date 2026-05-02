@@ -1,3 +1,5 @@
+import os
+import subprocess
 from pathlib import Path
 from typing import Optional
 
@@ -8,6 +10,77 @@ AIRFIELD_CONFIG = "airfield.yaml"
 AIRFIELD_LOCAL_CONFIG = ".air"
 LEGACY_PROJECT_MARKER = "project.yaml"
 LEGACY_PACKAGE_MARKER = "package.yaml"
+PACKAGES_GITHUB_REPO = "https://github.com/airfield/packages.git"
+
+
+def _xdg_home(env_name: str, fallback_suffix: str) -> Path:
+    value = os.environ.get(env_name)
+    if value:
+        return Path(value).expanduser()
+    return Path.home() / fallback_suffix
+
+
+def xdg_config_root() -> Path:
+    root = _xdg_home("XDG_CONFIG_HOME", ".config") / "airfield"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def xdg_cache_root() -> Path:
+    root = _xdg_home("XDG_CACHE_HOME", ".cache") / "airfield"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def xdg_data_root() -> Path:
+    root = _xdg_home("XDG_DATA_HOME", ".local/share") / "airfield"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def ensure_airfield_runtime_dirs() -> None:
+    xdg_config_root()
+    xdg_cache_root()
+    xdg_data_root()
+
+
+def _airfield_source_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _local_packages_root() -> Optional[Path]:
+    candidate = _airfield_source_root().parent / "packages"
+    if candidate.exists() and candidate.is_dir():
+        return candidate
+    return None
+
+
+def _cached_packages_root() -> Path:
+    cache_root = xdg_cache_root() / "packages"
+    if cache_root.exists():
+        return cache_root
+
+    cache_root.parent.mkdir(parents=True, exist_ok=True)
+    result = subprocess.run(
+        ["git", "clone", "--depth=1", PACKAGES_GITHUB_REPO, str(cache_root)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        details = (result.stderr or result.stdout or "unknown error").strip()
+        raise RuntimeError(
+            f"Unable to locate a local packages repository at {_airfield_source_root().parent / 'packages'} "
+            f"and cloning {PACKAGES_GITHUB_REPO} failed: {details}"
+        )
+    return cache_root
+
+
+def packages_repo_root() -> Path:
+    local = _local_packages_root()
+    if local is not None:
+        return local
+    return _cached_packages_root()
 
 
 def _load_yaml(path: Path):
@@ -92,7 +165,10 @@ def packages_dir(root: Path) -> Path:
 
 
 def dependencies_dir(root: Path, target_device: str) -> Path:
-    return root / "dependencies" / target_device
+    local_root = root / "dependencies" / target_device
+    if local_root.exists() and any(local_root.glob("*.yaml")):
+        return local_root
+    return packages_repo_root() / target_device
 
 
 def plans_dir(root: Path) -> Path:

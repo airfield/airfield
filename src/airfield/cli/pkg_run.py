@@ -4,6 +4,11 @@ from pathlib import Path
 from typing import Optional
 
 import typer
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+
+console = Console()
 
 from airfield.cli.package_exec import (
     build_package_image,
@@ -29,12 +34,22 @@ def _run_name_autocomplete(ctx: typer.Context, incomplete: str):
 
 
 def _print_available_run_commands(pkg) -> None:
-    print(f"Available run commands for package '{pkg.name}':")
     if not pkg.run:
-        print("  (none defined in airfield.yaml under 'run')")
+        console.print(f"[yellow]No run commands defined in airfield.yaml for package '{pkg.name}'[/yellow]")
         return
+
+    table = Table(show_header=False, box=None, padding=(0, 1))
     for name in sorted(pkg.run.keys()):
-        print(f"  - {name}")
+        table.add_row(f"[bold cyan]{name}[/bold cyan]")
+
+    console.print("")
+    console.print(Panel(
+        table,
+        title="Available run commands",
+        title_align="left",
+        expand=False,
+    ))
+    console.print("")
 
 
 def _host_workdir(pkg_dir: Path, pkg) -> str:
@@ -61,7 +76,7 @@ def run(
     execution: str = typer.Option("auto", "--execution", "-x", help="Execution mode: auto, container, or host"),
 ):
     """Run a named package command defined in airfield.yaml."""
-    print(f"Loading package {package_name or '(auto)'}...")
+    console.print(f"[dim]Loading package {package_name or '(auto)'}...[/dim]")
     pkg_dir, pkg, deps, source_root = resolve_package_context(package_name, target_device=target_device)
 
     if run_name is None:
@@ -85,11 +100,12 @@ def run(
 
     if mode == "auto":
         mode = "container" if shutil.which("docker") is not None else "host"
-        print(f"Execution mode auto-selected: {mode}")
+        console.print(f"[dim]Execution mode auto-selected: {mode}[/dim]")
 
     if mode == "host":
         workdir = _host_workdir(pkg_dir, pkg)
-        print(f"Running '{run_name}' on host in {workdir}: {command_text}")
+        console.print(f"Running [bold]{run_name}[/bold] on host in [dim]{workdir}[/dim]:")
+        console.print(f"  [blue]> {command_text}[/blue]")
         result = subprocess.run(["/bin/bash", "-lc", command_text], cwd=workdir)
         if result.returncode != 0:
             raise typer.Exit(result.returncode)
@@ -109,7 +125,8 @@ def run(
 
     mount_args = docker_mount_args(pkg_dir, pkg, source_root)
     runtime_gpu_args = gpu_runtime_args()
-    print(f"Build successful. Running '{run_name}' in {image_name}: {command_text}")
+    console.print(f"Build successful. Running [bold]{run_name}[/bold] in [cyan]{image_name}[/cyan]:")
+    console.print(f"  [blue]> {command_text}[/blue]")
 
     run_cmd = [
         "docker", "run", "--rm",

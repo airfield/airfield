@@ -4,21 +4,23 @@ Airfield is a package-centric robotics framework for structuring projects, decla
 
 ## Install
 
+Install the airfield tool from the master branch, which is stable:
+
 ```bash
-pipx install airfield
+pipx install git+https://github.com/airfield/airfield.git
 ```
 
 Shell completion is managed by your shell startup files, so it cannot be fully auto-enabled by `pipx install` alone.
-Use this one-liner instead:
+After installing, run:
 
 ```bash
-pipx install airfield && airfield --install-completion "$(basename "${SHELL:-bash}")"
+airfield system install-completion bash
 ```
 
-If Airfield is already installed, add bash completion with:
+Optionally, also install an `a` alias for `airfield`:
 
 ```bash
-airfield --install-completion "$(basename "${SHELL:-bash}")"
+airfield system alias --yes
 ```
 
 ## Command model
@@ -27,6 +29,7 @@ Airfield uses namespaced commands:
 
 - `airfield package ...` for package operations
 - `airfield project ...` for project operations
+- `airfield system ...` for system setup and maintenance
 - `airfield tools ...` for maintenance tasks
 - `airfield status` for context and runtime status
 - `airfield doctor` for system dependency checks
@@ -39,7 +42,10 @@ Common lifecycle commands:
 - `airfield package cmd`
 - `airfield project init`
 - `airfield project deinit`
-- `airfield tools system clean`
+- `airfield system alias` (install `a` shorthand)
+- `airfield system install-completion` (set up shell completion)
+- `airfield system update` (check for new releases)
+- `airfield system clean` (remove containers)
 - `airfield doctor`
 
 Unique prefixes are accepted when unambiguous.
@@ -242,10 +248,11 @@ dependencies:
 source_path: src
 ```
 
-- `dependencies` are resolved from `dependencies/<target_device>/*.yaml`
+- Package dependency definitions should live in `https://github.com/airfield/packages`. When working locally on developing the `airfield` tool, Airfield first looks for a sibling `packages/<target_device>/*.yaml` checkout next to the source tree, and if that is not present it uses the shared clone under Airfield's runtime cache. See [packages/README.md](/home/ntsoi/social_world_model/packages/README.md) for details.
+- If working on a new package, you can have a local `dependencies/<target_device>/` folder in the package, Airfield will build from it but prints a warning telling you to upstream the manifests with `airfield package dependencies upstream`.
 - `source_path` is relative to the package directory
 - `ros_distro` selects the ROS base image and workspace overlay
-- for wrapped ROS packages, `source_path` is usually `.`
+- For wrapped ROS packages, `source_path` is usually `.`
 
 Dependency policy:
 

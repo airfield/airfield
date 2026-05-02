@@ -218,6 +218,14 @@ class Builder:
                     ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc", "build", "dist", "*.egg-info"),
                 )
 
+            local_dependency_root = context_dir / "dependencies" / self.target_device
+            if local_dependency_root.exists() and any(local_dependency_root.glob("**/*.yaml")):
+                print("[WARN] Local dependency manifests were found in the source tree.")
+                print("[WARN] Please upstream them to the packages repository instead of keeping them local.")
+                print("[WARN] Repo: https://github.com/airfield/packages")
+                print("[WARN] README: https://github.com/airfield/packages#readme")
+                print("[WARN] Command: airfield package dependencies upstream")
+
             dockerfile_content = self.generate_dockerfile(
                 install_local_airfield=airfield_repo is not None,
                 cache_mounts_enabled=cache_mounts_enabled,

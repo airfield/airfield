@@ -31,7 +31,10 @@ Airfield uses namespaced commands:
 - `airfield project init`
 - `airfield project run`
 - `airfield project liftoff`
-- `airfield tools system clean`
+- `airfield system alias` (install `a` shorthand)
+- `airfield system install-completion` (set up shell completion)
+- `airfield system update` (check for new releases)
+- `airfield system clean` (remove containers)
 - `airfield status`
 - `airfield doctor`
 
@@ -102,10 +105,12 @@ The command does not rewrite ROS Python/C++ sources.
 
 ## Dependency model
 
-Dependency manifests are architecture-specific YAML files in:
+Dependency manifests are architecture-specific YAML files in the separate packages repository:
 
-- `dependencies/x86_64/*.yaml`
-- `dependencies/arm64/*.yaml`
+- local checkout next to the Airfield source tree: `../packages/x86_64/*.yaml` and `../packages/arm64/*.yaml`
+- fallback source: `https://github.com/airfield/packages`
+
+If a package keeps local dependency manifests in its source tree, Airfield still reads them, but it prints a build warning telling you to upstream them with `airfield package dependencies upstream`.
 
 Each dependency may define:
 

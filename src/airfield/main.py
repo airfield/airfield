@@ -3,9 +3,9 @@ import typer
 from rich.console import Console
 from typer.core import TyperGroup
 
-from airfield.cli import build, doctor, docker_cache_cmd, liftoff, pkg_cmd, pkg_deinit, pkg_init, pkg_run, pkg_shell, proj_deinit, proj_init, run, status, up
+from airfield.cli import build, dependencies_upstream, doctor, docker_cache_cmd, liftoff, pkg_cmd, pkg_deinit, pkg_init, pkg_run, pkg_shell, proj_deinit, proj_init, run, status, up
 from airfield.cli import tools_system
-from airfield.config import find_package_root, find_project_root
+from airfield.config import ensure_airfield_runtime_dirs, find_package_root, find_project_root
 
 
 class PrefixGroup(TyperGroup):
@@ -124,6 +124,8 @@ app.add_typer(pkg_app, name="package")
 app.add_typer(proj_app, name="project")
 app.add_typer(tools_app, name="tools")
 tools_app.add_typer(tools_system_app, name="system")
+# Expose `airfield system` as a top-level namespace as well
+app.add_typer(tools_system_app, name="system")
 app.add_typer(docker_app, name="docker")
 
 pkg_app.command(name="init")(pkg_init.run)
@@ -134,12 +136,20 @@ pkg_app.command(name="cmd")(pkg_cmd.run)
 pkg_app.command(name="run")(pkg_run.run)
 pkg_app.command(name="up")(up.run)
 
+deps_app = typer.Typer(help="Dependency repository operations", cls=PrefixGroup, invoke_without_command=True)
+pkg_app.add_typer(deps_app, name="dependencies")
+deps_app.command(name="check")(dependencies_upstream.check)
+deps_app.command(name="upstream")(dependencies_upstream.upstream)
+
 proj_app.command(name="init")(proj_init.run)
 proj_app.command(name="deinit")(proj_deinit.run)
 proj_app.command(name="run")(run.run)
 proj_app.command(name="liftoff")(liftoff.run)
 
 tools_system_app.command(name="clean")(tools_system.run)
+tools_system_app.command(name="update")(tools_system.update)
+tools_system_app.command(name="alias")(tools_system.install_alias)
+tools_system_app.command(name="install-completion")(tools_system.install_completion)
 
 docker_app.command(name="cache")(docker_cache_cmd.run)
 
@@ -196,6 +206,7 @@ def _context_message():
 @app.callback(invoke_without_command=True)
 def main(ctx: typer.Context):
     """Airfield CLI"""
+    ensure_airfield_runtime_dirs()
     message = _context_message()
     if message is not None:
         console.print(f"[dim]{message}[/dim]")

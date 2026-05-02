@@ -67,13 +67,13 @@ def resolve_package_context(
                 pkg_dir = candidate.resolve()
             else:
                 pkg_dir = (packages_dir(root) / package_name).resolve()
-        dep_root = dependencies_dir(root, target_device)
+        dep_root = dependencies_dir(pkg_dir, target_device)
     else:
         if package_name is not None:
             pkg_dir = Path(package_name).expanduser().resolve()
         else:
             pkg_dir = require_package_root()
-        dep_root = pkg_dir / "dependencies" / target_device
+        dep_root = dependencies_dir(pkg_dir, target_device)
 
     pkg_yaml = pkg_dir / AIRFIELD_CONFIG
     if not pkg_yaml.exists():
@@ -114,7 +114,15 @@ def build_package_image(
     _apply_locked_dependency_versions(pkg)
     _validate_and_configure_host_dependencies(pkg, deps)
 
-    print(f"Building container for {pkg.name} ({target_device})...")
+    local_dependency_root = pkg_dir / "dependencies" / target_device
+    if local_dependency_root.exists():
+        print("[WARN] Local dependency manifests were found in the source tree.")
+        print("[WARN] Please upstream them to the packages repository instead of keeping them local.")
+        print("[WARN] Repo: https://github.com/airfield/packages")
+        print("[WARN] README: https://github.com/airfield/packages#readme")
+        print("[WARN] Command: airfield package dependencies upstream")
+
+        # Removed duplicate print statement
     builder = Builder(package=pkg, dependencies=deps, target_device=target_device)
     success, image_name = builder.build(context_dir=pkg_dir, show_all_output=show_all_output)
     if not success:

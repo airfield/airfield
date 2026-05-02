@@ -208,15 +208,70 @@ def _shell_rc_path(shell_name: str) -> Path:
 
 def _completion_configured(shell_name: str) -> bool:
     rc_path = _shell_rc_path(shell_name)
-    if not rc_path.exists():
-        return False
-
+    # Check user RC file first
     try:
-        content = rc_path.read_text(encoding="utf-8")
+        if rc_path.exists():
+            content = rc_path.read_text(encoding="utf-8")
+            if "_AIRFIELD_COMPLETE" in content or "airfield --install-completion" in content:
+                return True
     except Exception:
-        return False
+        pass
 
-    return "_AIRFIELD_COMPLETE" in content or "airfield --install-completion" in content
+    # Check common system-wide or shell-specific completion locations
+    home = Path.home()
+    if shell_name == "bash":
+        candidates = [
+            Path("/etc/bash_completion.d/airfield"),
+            Path("/usr/share/bash-completion/completions/airfield"),
+            home / ".local" / "share" / "bash-completion" / "completions" / "airfield",
+        ]
+        for p in candidates:
+            if p.exists():
+                return True
+
+    if shell_name == "zsh":
+        candidates = [
+            home / ".zfunc" / "_airfield",
+            home / ".zsh" / "_airfield",
+            Path("/usr/share/zsh/functions/Completion/Unix/_airfield"),
+        ]
+        for p in candidates:
+            if p.exists():
+                return True
+
+    if shell_name == "fish":
+        candidates = [
+            home / ".config" / "fish" / "completions" / "airfield.fish",
+            Path("/etc/fish/completions/airfield.fish"),
+        ]
+        for p in candidates:
+            if p.exists():
+                return True
+
+    # As a last-resort, try launching an interactive instance of the user's
+    # shell and query whether completion is currently registered. This helps
+    # detect completions that are loaded from non-standard locations.
+    try:
+        shell_bin = os.environ.get("SHELL", "/bin/bash")
+        sh_name = Path(shell_bin).name.lower()
+        if sh_name == "bash":
+            probe = [shell_bin, "-ic", "complete -p airfield >/dev/null 2>&1 && printf yes || printf no"]
+        elif sh_name == "zsh":
+            probe = [shell_bin, "-ic", "whence -w _airfield >/dev/null 2>&1 && printf yes || printf no"]
+        elif sh_name == "fish":
+            probe = [shell_bin, "-ic", "complete -c airfield >/dev/null 2>&1 && printf yes || printf no"]
+        else:
+            probe = None
+
+        if probe is not None:
+            result = subprocess.run(probe, capture_output=True, text=True, check=False, timeout=2)
+            out = (result.stdout or "").strip().lower()
+            if out == "yes":
+                return True
+    except Exception:
+        pass
+
+    return False
 
 
 def _install_completion(shell_name: str) -> Tuple[bool, str]:
@@ -255,7 +310,7 @@ def _check_shell_completion(auto_fix: bool) -> Tuple[str, str, Optional[str]]:
         return "fail", "Shell completion", message
 
     return "warn", "Shell completion", (
-        f"not configured for {shell_name}. Run: airfield --install-completion {shell_name}"
+        f"not configured for {shell_name}. Run: airfield system install-completion {shell_name}"
     )
 
 
@@ -282,7 +337,13 @@ def run(
     results.append(_check_docker())
     results.append(_check_shell_completion(auto_fix=fix))
     results.append(_check_gpu_accelerator())
-    results.append(_check_pytorch_gpu())
+    # Only probe PyTorch when running inside a container environment where
+    # GPU runtime checks are relevant. Avoid warning users on hosts without
+    # PyTorch installed.
+    if _inside_container():
+        results.append(_check_pytorch_gpu())
+    else:
+        results.append(("pass", "PyTorch", "skipped (not running inside container)"))
 
     for status, name, detail in results:
         _print_result(status, name, detail)

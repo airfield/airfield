@@ -2,6 +2,7 @@ import subprocess
 from typing import Optional
 
 import typer
+from rich.console import Console
 
 from airfield.cli.package_exec import (
     build_package_image,
@@ -11,6 +12,8 @@ from airfield.cli.package_exec import (
     in_airfield_container,
     resolve_package_context,
 )
+
+console = Console()
 
 
 def run(
@@ -24,11 +27,11 @@ def run(
             "You are already in the container environment; use a nested shell or exit to return to the host."
         )
 
-    print(f"Loading package {package_name or '(auto)'}...")
+    console.print(f"[dim]Loading package {package_name or '(auto)'}...[/dim]")
     pkg_dir, pkg, deps, source_root = resolve_package_context(package_name, target_device=target_device)
     image_name = build_package_image(pkg_dir, pkg, deps, target_device=target_device)
 
-    print(f"Build successful. Opening shell in {image_name}...")
+    console.print(f"Build successful. Opening shell in [cyan]{image_name}[/cyan]...")
     mount_args = docker_mount_args(pkg_dir, pkg, source_root)
     runtime_gpu_args = gpu_runtime_args()
     run_cmd = [
