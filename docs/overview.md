@@ -41,7 +41,8 @@ Airfield uses namespaced commands:
 `airfield doctor` reports required system dependencies and accelerator diagnostics
 (Docker, shell completion, NVIDIA GPU/CUDA presence, and PyTorch GPU runtime checks).
 
-Any unambiguous unique prefix is accepted by the CLI.
+Unique prefixes are accepted when they identify one registered command at that
+level. Unknown top-level command fallback is not accepted.
 
 The old top-level commands (`create`, `build`, `up`, `run`, `liftoff`) are removed.
 
@@ -129,7 +130,7 @@ For host dependency checks, Airfield can auto-detect GPU presence and driver ver
 4. `airfield package build <name>` to build package container image
 5. `airfield project run <name>` to run one package container
 6. `airfield package shell <name>` to open an interactive shell in the package container
-7. `airfield package cmd --package <name> -- <command...>` to run one command in the package container
+7. `airfield package cmd <name> -- <command...>` to run one command in the package container
 8. `airfield project liftoff <plan>` to run all packages listed in a plan
 9. `airfield package up <plan>` to render tmuxinator session config (and optionally launch)
 10. `airfield status` to inspect package/project metadata and container runtime state

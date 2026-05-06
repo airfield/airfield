@@ -16,6 +16,9 @@ def test_project_init(cli_runner, temp_workspace):
     assert (project_dir / "dependencies" / "x86_64").exists()
     assert (project_dir / "dependencies" / "arm64").exists()
     assert (project_dir / "plans").exists()
+    assert (project_dir / "plans" / "example.yaml").exists()
+    assert (project_dir / ".dockerignore").exists()
+    assert (project_dir / ".gitignore").exists()
 
 def test_package_init_standalone(cli_runner, temp_workspace):
     """Test initializing a standalone package."""
@@ -28,6 +31,9 @@ def test_package_init_standalone(cli_runner, temp_workspace):
     assert pkg_dir.exists()
     assert (pkg_dir / "airfield.yaml").exists()
     assert (pkg_dir / "src").exists()
+    assert (pkg_dir / "README.md").exists()
+    assert (pkg_dir / ".dockerignore").exists()
+    assert (pkg_dir / ".gitignore").exists()
 
 def test_package_init_inside_project(cli_runner, temp_workspace):
     """Test initializing a package inside a project."""
@@ -41,3 +47,6 @@ def test_package_init_inside_project(cli_runner, temp_workspace):
     assert pkg_dir.exists()
     assert (pkg_dir / "airfield.yaml").exists()
     assert (pkg_dir / "src").exists()
+    assert (pkg_dir / "README.md").exists()
+    assert (pkg_dir / ".dockerignore").exists()
+    assert (pkg_dir / ".gitignore").exists()

@@ -48,17 +48,11 @@ Common lifecycle commands:
 - `airfield system clean` (remove containers)
 - `airfield doctor`
 
-Unique prefixes are accepted when unambiguous.
+Unique prefixes are accepted when they identify one registered command at that
+level. Unknown top-level command fallback is not accepted, so package and
+project commands still need a namespace or a unique namespace prefix.
 
-When Airfield detects the current directory is inside an Airfield project or package, it prints the detected context and defaults unknown top-level commands to the matching namespace:
-
-- inside a project: default namespace is `project`
-- inside a package: default namespace is `package`
-
-Examples from inside a project/package:
-
-- `airfield init` -> `airfield project init`
-- `airfield b --help` (inside a package) -> `airfield package build --help`
+When Airfield detects the current directory is inside an Airfield project or package, it prints the detected context, but it does not route unknown top-level commands into that context.
 
 Top-level legacy commands (`create`, `build`, `up`, `run`, `liftoff`) are intentionally removed.
 
@@ -320,6 +314,5 @@ pipx install --force --editable ".[test]"
 To run the test suite in an isolated environment using your local source:
 
 ```bash
-pipx run --spec ".[test]" python3 -m pytest
+pipx run --no-cache --editable --spec ".[test]" python3 -m pytest
 ```
-

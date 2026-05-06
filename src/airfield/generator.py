@@ -24,8 +24,8 @@ jobs:
 
       - name: Build Airfield Package
         run: |
-          airfield pkg build {{ package_name }}
-          # airfield proj run {{ package_name }} --test
+          airfield package build {{ package_name }}
+          # airfield project run {{ package_name }} --test
 """
 
 def generate_github_action(package_name: str, out_dir: Path):

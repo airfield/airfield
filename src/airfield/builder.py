@@ -224,7 +224,7 @@ class Builder:
                 print("[WARN] Please upstream them to the packages repository instead of keeping them local.")
                 print("[WARN] Repo: https://github.com/airfield/packages")
                 print("[WARN] README: https://github.com/airfield/packages#readme")
-                print("[WARN] Command: airfield package dependencies upstream")
+                print("[WARN] Command: airfield package dependencies upstream .")
 
             dockerfile_content = self.generate_dockerfile(
                 install_local_airfield=airfield_repo is not None,

@@ -40,7 +40,7 @@ def _resolve_local_dependency_root(start: Path, target_device: str) -> Path:
 
 
 def check(
-    target: Path = typer.Argument(..., help="Package or project directory to inspect (use '.' for current)"),
+    target: Path = typer.Argument(Path("."), help="Package or project directory to inspect (defaults to current)"),
     target_device: str = typer.Option("x86_64", "--target-device", help="Target architecture for dependency manifests"),
 ):
     """Check local dependency manifests against the shared packages repository."""
@@ -66,7 +66,7 @@ def check(
 
 
 def upstream(
-    target: Path = typer.Argument(..., help="Package or project directory to upstream from (use '.' for current)"),
+    target: Path = typer.Argument(Path("."), help="Package or project directory to upstream from (defaults to current)"),
     target_device: str = typer.Option("x86_64", "--target-device", help="Target architecture for dependency manifests"),
 ):
     """Prepare local dependency manifests for upstreaming into the shared packages repository."""

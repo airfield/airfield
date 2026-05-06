@@ -20,7 +20,7 @@ def run(plan_name: str):
     print("Orchestrating packages via Airfield project run...")
     for pkg in plan.packages:
         print(f" -> Launching {pkg}...")
-        result = subprocess.run(["airfield", "proj", "run", pkg])
+        result = subprocess.run(["airfield", "project", "run", pkg])
         if result.returncode != 0:
             print(f"Error: failed to launch {pkg}")
             raise typer.Exit(1)
