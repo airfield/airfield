@@ -25,6 +25,7 @@ Airfield uses namespaced commands:
 
 - `airfield package init`
 - `airfield package build`
+- `airfield package run`
 - `airfield package shell`
 - `airfield package cmd`
 - `airfield package up`
@@ -128,7 +129,7 @@ For host dependency checks, Airfield can auto-detect GPU presence and driver ver
 2. `airfield package init <name>` to create a new package, or `airfield package init --path ...` to wrap an existing ROS package
 3. Fill package source and dependency manifests
 4. `airfield package build <name>` to build package container image
-5. `airfield project run <name>` to run one package container
+5. `airfield package run <name> <run-command>` to run a named package command
 6. `airfield package shell <name>` to open an interactive shell in the package container
 7. `airfield package cmd <name> -- <command...>` to run one command in the package container
 8. `airfield project liftoff <plan>` to run all packages listed in a plan
@@ -154,5 +155,5 @@ packages:
 
 - Dependency version constraints are normalized to names for resolution in the current implementation.
 - Full dependency graph solving and loop detection are not yet implemented.
-- `airfield project run` currently runs package images with an interactive shell entrypoint by default.
+- `airfield project run` currently runs a package's `default` command when present, otherwise it opens an interactive shell.
 - `airfield package deinit` and `airfield project deinit` remove the package image and any containers created from it.

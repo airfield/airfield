@@ -110,15 +110,6 @@ def build_package_image(
     _apply_locked_dependency_versions(pkg)
     _validate_and_configure_host_dependencies(pkg, deps)
 
-    local_dependency_root = pkg_dir / "dependencies" / target_device
-    if local_dependency_root.exists():
-        print("[WARN] Local dependency manifests were found in the source tree.")
-        print("[WARN] Please upstream them to the packages repository instead of keeping them local.")
-        print("[WARN] Repo: https://github.com/airfield/packages")
-        print("[WARN] README: https://github.com/airfield/packages#readme")
-        print("[WARN] Command: airfield package dependencies upstream .")
-
-        # Removed duplicate print statement
     builder = Builder(package=pkg, dependencies=deps, target_device=target_device)
     success, image_name = builder.build(context_dir=pkg_dir, show_all_output=show_all_output)
     if not success:

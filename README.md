@@ -44,6 +44,7 @@ Common lifecycle commands:
 - `airfield package cmd`
 - `airfield project init`
 - `airfield project deinit`
+- `airfield project run` (run a package's `default` command, or open a shell)
 - `airfield system alias` (install `a` shorthand)
 - `airfield system install-completion` (set up shell completion)
 - `airfield system update` (check for new releases)
@@ -146,16 +147,23 @@ In a standalone package, dependency manifests are resolved from the package root
 
 Airfield does not copy package source into image layers. It mounts `source_path` into the container at runtime.
 
-### 5. Run one package
+### 5. Run a named package command
+
+Define named commands in `packages/nav_stack/airfield.yaml`:
+
+```yaml
+run:
+	list-packages: ros2 pkg list
+```
 
 ```bash
-airfield project run nav_stack
+airfield package run nav_stack list-packages
 ```
 
 In a standalone package directory:
 
 ```bash
-airfield project run .
+airfield package run . list-packages
 ```
 
 ### 5b. Open shell in package container
@@ -300,7 +308,7 @@ packages:
 ## Notes
 
 - Run commands from inside an Airfield project or one of its subdirectories.
-- `airfield project run` currently starts an interactive container shell for the selected package image.
+- `airfield project run` currently runs the selected package's `default` command when present, otherwise it starts an interactive container shell.
 
 
 ## Development
