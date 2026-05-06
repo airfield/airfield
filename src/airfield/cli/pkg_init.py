@@ -121,6 +121,9 @@ def _init_new_package(name: str, force: bool, ros_distro: str) -> None:
         )
 
     _ensure_gitignore_entry(pkg_dir, ".air")
+    _ensure_gitignore_entry(pkg_dir, "build/")
+    _ensure_gitignore_entry(pkg_dir, "log/")
+    _ensure_gitignore_entry(pkg_dir, "install/")
 
     # Generate .dockerignore for optimized container builds
     generate_dockerignore(pkg_dir)
@@ -160,6 +163,9 @@ def _wrap_existing_ros_package(path: Path, force: bool, ros_distro: str) -> None
         )
 
     _ensure_gitignore_entry(pkg_dir, ".air")
+    _ensure_gitignore_entry(pkg_dir, "build/")
+    _ensure_gitignore_entry(pkg_dir, "log/")
+    _ensure_gitignore_entry(pkg_dir, "install/")
 
     # Generate .dockerignore for optimized container builds
     generate_dockerignore(pkg_dir)

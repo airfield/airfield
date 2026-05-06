@@ -92,6 +92,9 @@ def run(
     )
 
     _ensure_gitignore_entry(project_root, ".air")
+    _ensure_gitignore_entry(project_root, "build/")
+    _ensure_gitignore_entry(project_root, "log/")
+    _ensure_gitignore_entry(project_root, "install/")
 
     # Generate .dockerignore for optimized container builds
     generate_dockerignore(project_root)
