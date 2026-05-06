@@ -64,13 +64,8 @@ def _host_workdir(pkg_dir: Path, pkg) -> str:
 
 
 def run(
+    package_name: str = typer.Argument(..., help="Package name/path (use '.' for current package)"),
     run_name: Optional[str] = typer.Argument(None, help="Run command name from package airfield.yaml", autocompletion=_run_name_autocomplete),
-    package_name: Optional[str] = typer.Option(
-        None,
-        "--package",
-        "-p",
-        help="Package name/path (optional in standalone package roots)",
-    ),
     target_device: str = typer.Option("x86_64", "--target-device", help="Target architecture for dependency resolution"),
     args: Optional[str] = typer.Option(None, "--args", "-a", help="Extra arguments appended to the configured run command"),
     execution: str = typer.Option("auto", "--execution", "-x", help="Execution mode: auto, container, or host"),

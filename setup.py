@@ -7,6 +7,7 @@ setup(
 	package_dir={"": "src"},
 	packages=find_packages(where="src"),
 	include_package_data=True,
+	package_data={"airfield": ["templates/docker/*.j2", "templates/tmux/*.j2"]},
 	install_requires=[
 		"typer>=0.9.0",
 		"jinja2>=3.1.0",
@@ -15,5 +16,11 @@ setup(
 		"pydantic>=2.0.0",
 		"pyyaml>=6.0",
 	],
+	extras_require={
+		"test": [
+			"pytest>=7.0.0",
+			"pytest-mock>=3.10.0",
+		]
+	},
 	entry_points={"console_scripts": ["airfield=airfield.main:app"]},
 )

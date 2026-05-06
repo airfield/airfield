@@ -6,7 +6,7 @@ from airfield.cli.package_exec import build_package_image, in_airfield_container
 
 
 def run(
-    package_name: Optional[str] = typer.Argument(None, help="Package name (optional in standalone package roots)"),
+    package_name: str = typer.Argument(..., help="Package name/path (use '.' for current package)"),
     target_device: str = typer.Option("x86_64", "--target-device", help="Target architecture for dependency resolution"),
     show_all_output: bool = typer.Option(False, "--show-all-output", help="Show full Docker build output for debugging"),
 ):

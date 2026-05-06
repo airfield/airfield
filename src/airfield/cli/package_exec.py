@@ -67,7 +67,7 @@ def resolve_package_context(
                 pkg_dir = candidate.resolve()
             else:
                 pkg_dir = (packages_dir(root) / package_name).resolve()
-        dep_root = dependencies_dir(pkg_dir, target_device)
+        dep_root = dependencies_dir(root, target_device)
     else:
         if package_name is not None:
             pkg_dir = Path(package_name).expanduser().resolve()
@@ -120,7 +120,7 @@ def build_package_image(
         print("[WARN] Please upstream them to the packages repository instead of keeping them local.")
         print("[WARN] Repo: https://github.com/airfield/packages")
         print("[WARN] README: https://github.com/airfield/packages#readme")
-        print("[WARN] Command: airfield package dependencies upstream")
+        print("[WARN] Command: airfield package dependencies upstream .")
 
         # Removed duplicate print statement
     builder = Builder(package=pkg, dependencies=deps, target_device=target_device)

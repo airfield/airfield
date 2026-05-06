@@ -14,7 +14,7 @@ from airfield.cli.package_exec import (
 console = Console()
 
 def run(
-    package_name: Optional[str] = typer.Argument(None, help="Package name (optional in standalone package roots)"),
+    package_name: str = typer.Argument(..., help="Package name/path (use '.' for current package)"),
     test: bool = typer.Option(False, "--test", help="Run in test mode"),
 ):
     console.print(f"[dim]Loading package {package_name or '(auto)'}...[/dim]")

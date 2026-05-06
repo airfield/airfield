@@ -15,13 +15,8 @@ from airfield.cli.package_exec import (
 
 
 def run(
+    package_name: str = typer.Argument(..., help="Package name/path (use '.' for current package)"),
     command: List[str] = typer.Argument(..., help="Command to execute inside the package container"),
-    package_name: Optional[str] = typer.Option(
-        None,
-        "--package",
-        "-p",
-        help="Package name/path (optional in standalone package roots)",
-    ),
     target_device: str = typer.Option("x86_64", "--target-device", help="Target architecture for dependency resolution"),
 ):
     """Run a command directly in the package container with source mounted."""

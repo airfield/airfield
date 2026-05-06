@@ -3,7 +3,7 @@ from typing import List, Optional
 
 import typer
 
-from airfield.config import packages_repo_root
+from airfield.config import find_package_root, find_project_root, packages_repo_root
 
 
 def _dependency_names(dep_root: Path) -> List[str]:
@@ -12,17 +12,39 @@ def _dependency_names(dep_root: Path) -> List[str]:
     return sorted(path.stem for path in dep_root.glob("*.yaml") if path.is_file())
 
 
-def _local_dependency_root(pkg_dir: Path, target_device: str) -> Path:
-    return pkg_dir / "dependencies" / target_device
+def _dependency_root_for(root: Path, target_device: str) -> Path:
+    return root / "dependencies" / target_device
+
+
+def _resolve_local_dependency_root(start: Path, target_device: str) -> Path:
+    """Resolve local dependency manifests from package or project context."""
+    start = start.expanduser().resolve()
+    if start.is_file():
+        start = start.parent
+
+    direct_root = _dependency_root_for(start, target_device)
+    if direct_root.exists():
+        return direct_root
+
+    package_root = find_package_root(start)
+    if package_root is not None:
+        package_dep_root = _dependency_root_for(package_root, target_device)
+        if package_dep_root.exists():
+            return package_dep_root
+
+    project_root = find_project_root(start)
+    if project_root is not None:
+        return _dependency_root_for(project_root, target_device)
+
+    return direct_root
 
 
 def check(
-    package: Optional[Path] = typer.Option(None, "--package", help="Package directory to inspect"),
+    target: Path = typer.Argument(..., help="Package or project directory to inspect (use '.' for current)"),
     target_device: str = typer.Option("x86_64", "--target-device", help="Target architecture for dependency manifests"),
 ):
     """Check local dependency manifests against the shared packages repository."""
-    pkg_dir = (package or Path.cwd()).expanduser().resolve()
-    local_dep_root = _local_dependency_root(pkg_dir, target_device)
+    local_dep_root = _resolve_local_dependency_root(target, target_device)
     if not local_dep_root.exists():
         typer.echo(f"No local dependencies found at {local_dep_root}")
         raise typer.Exit(0)
@@ -44,12 +66,11 @@ def check(
 
 
 def upstream(
-    package: Optional[Path] = typer.Option(None, "--package", help="Package directory to upstream from"),
+    target: Path = typer.Argument(..., help="Package or project directory to upstream from (use '.' for current)"),
     target_device: str = typer.Option("x86_64", "--target-device", help="Target architecture for dependency manifests"),
 ):
     """Prepare local dependency manifests for upstreaming into the shared packages repository."""
-    pkg_dir = (package or Path.cwd()).expanduser().resolve()
-    local_dep_root = _local_dependency_root(pkg_dir, target_device)
+    local_dep_root = _resolve_local_dependency_root(target, target_device)
     if not local_dep_root.exists():
         typer.echo(f"No local dependencies found at {local_dep_root}")
         raise typer.Exit(1)
@@ -67,7 +88,7 @@ def upstream(
 
     typer.echo("Repository: https://github.com/airfield/packages")
     typer.echo("README: https://github.com/airfield/packages#readme")
-    typer.echo("Command: airfield package dependencies upstream")
+    typer.echo("Command: airfield package dependencies upstream .")
 
     if not typer.confirm("Copy local dependency manifests into the packages repository?", default=False):
         raise typer.Exit(1)

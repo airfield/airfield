@@ -128,19 +128,23 @@ It does not rewrite existing ROS source files.
 airfield package build nav_stack --target-device x86_64
 ```
 
-In a standalone package directory, package name is optional:
+In a standalone package directory, use `.` for the current package:
 
 ```bash
-airfield package build --target-device x86_64
+airfield package build . --target-device x86_64
 ```
 
 To show full Docker build logs for debugging:
 
 ```bash
-airfield package build --target-device x86_64 --show-all-output
+airfield package build . --target-device x86_64 --show-all-output
 ```
 
-Standalone dependency manifests are resolved from:
+Inside a project, dependency manifests are resolved from the project root:
+
+- `./dependencies/<target-device>/*.yaml`
+
+In a standalone package, dependency manifests are resolved from the package root:
 
 - `./dependencies/<target-device>/*.yaml`
 
@@ -155,19 +159,25 @@ airfield project run nav_stack
 In a standalone package directory:
 
 ```bash
-airfield project run
+airfield project run .
 ```
 
 ### 5b. Open shell in package container
 
 ```bash
-airfield package shell
+airfield package shell nav_stack
 ```
 
 ### 5c. Run command in package container
 
 ```bash
-airfield package cmd -- ros2 pkg list
+airfield package cmd nav_stack -- ros2 pkg list
+```
+
+To run in the current package:
+
+```bash
+airfield package cmd . -- ros2 pkg list
 ```
 
 ### 6. Run a plan
@@ -248,8 +258,8 @@ dependencies:
 source_path: src
 ```
 
-- Package dependency definitions should live in `https://github.com/airfield/packages`. When working locally on developing the `airfield` tool, Airfield first looks for a sibling `packages/<target_device>/*.yaml` checkout next to the source tree, and if that is not present it uses the shared clone under Airfield's runtime cache. See [packages/README.md](/home/ntsoi/social_world_model/packages/README.md) for details.
-- If working on a new package, you can have a local `dependencies/<target_device>/` folder in the package, Airfield will build from it but prints a warning telling you to upstream the manifests with `airfield package dependencies upstream`.
+- Package dependency definitions should live in `https://github.com/airfield/packages`. When working locally on developing the `airfield` tool, Airfield first looks for a sibling `packages/<target_device>/*.yaml` checkout next to the source tree, and if that is not present it uses the shared clone under Airfield's runtime cache. See the packages repository README for details.
+- If working on a new package, you can have a local `dependencies/<target_device>/` folder in the project or standalone package. Airfield will build from it but prints a warning telling you to upstream the manifests with `airfield package dependencies upstream .`.
 - `source_path` is relative to the package directory
 - `ros_distro` selects the ROS base image and workspace overlay
 - For wrapped ROS packages, `source_path` is usually `.`
@@ -299,8 +309,17 @@ packages:
 
 ## Development
 
-To install the current Airfield code for development, check out the repo and run:
+To install Airfield globally for development (so the `airfield` command is available everywhere but points to this source code) and include testing tools:
 
 ```bash
-pipx install --editable .
+pipx install --force --editable ".[test]"
 ```
+
+### Running tests
+
+To run the test suite in an isolated environment using your local source:
+
+```bash
+pipx run --spec ".[test]" python3 -m pytest
+```
+
