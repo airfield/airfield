@@ -34,8 +34,16 @@ def run(
         image_name,
         "/bin/bash"
     ]
+
     if test:
         run_cmd.extend(["-c", "echo 'Tests passed.'"])
+    else:
+        entrypoint_cmd = pkg.run.get("default")
+
+        if entrypoint_cmd:
+            run_cmd.extend(["-lc", entrypoint_cmd])
+        else:
+            console.print("[yellow]Warning: No 'default' run command defined in airfield.yaml. Dropping into interactive shell.[/yellow]")
         
     subprocess.run(run_cmd)
 

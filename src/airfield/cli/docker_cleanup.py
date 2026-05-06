@@ -1,14 +1,13 @@
 import subprocess
 from pathlib import Path
 
-from airfield.config import AIRFIELD_CONFIG, LEGACY_PACKAGE_MARKER
+from airfield.config import AIRFIELD_CONFIG
 from airfield.models import Package
 
 
 def cleanup_package_container_artifacts(package_root: Path) -> None:
     manifest = package_root / AIRFIELD_CONFIG
-    if not manifest.exists():
-        manifest = package_root / LEGACY_PACKAGE_MARKER
+
     if not manifest.exists():
         return
 

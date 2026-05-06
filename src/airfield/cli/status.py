@@ -8,8 +8,6 @@ from rich.console import Console
 
 from airfield.config import (
     AIRFIELD_CONFIG,
-    LEGACY_PACKAGE_MARKER,
-    LEGACY_PROJECT_MARKER,
     dependencies_dir,
     find_package_root,
     find_project_root,
@@ -33,9 +31,6 @@ def _package_manifest_path(package_root: Path) -> Optional[Path]:
     primary = package_root / AIRFIELD_CONFIG
     if primary.exists():
         return primary
-    legacy = package_root / LEGACY_PACKAGE_MARKER
-    if legacy.exists():
-        return legacy
     return None
 
 
@@ -43,9 +38,6 @@ def _project_manifest_path(project_root: Path) -> Optional[Path]:
     primary = project_root / AIRFIELD_CONFIG
     if primary.exists():
         return primary
-    legacy = project_root / LEGACY_PROJECT_MARKER
-    if legacy.exists():
-        return legacy
     return None
 
 
@@ -106,7 +98,7 @@ def _print_project_status(project_root: Path) -> None:
         for child in sorted(project_packages.iterdir()):
             if not child.is_dir():
                 continue
-            if (child / AIRFIELD_CONFIG).exists() or (child / LEGACY_PACKAGE_MARKER).exists():
+            if (child / AIRFIELD_CONFIG).exists():
                 package_count += 1
                 package_names.append(child.name)
 

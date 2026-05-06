@@ -4,7 +4,7 @@ import typer
 import yaml
 from rich.console import Console
 
-from airfield.config import AIRFIELD_CONFIG, LEGACY_PROJECT_MARKER
+from airfield.config import AIRFIELD_CONFIG
 from airfield.models import SUPPORTED_ROS_DISTROS
 from airfield.docker_cache import generate_dockerignore
 
@@ -48,10 +48,8 @@ def run(
     project_root.mkdir(parents=True, exist_ok=True)
 
     marker_path = project_root / AIRFIELD_CONFIG
-    legacy_marker_path = project_root / LEGACY_PROJECT_MARKER
-    if (marker_path.exists() or legacy_marker_path.exists()) and not force:
-        existing = marker_path if marker_path.exists() else legacy_marker_path
-        console.print(f"[yellow]{existing.name} already exists at {existing}. Use --force to overwrite.[/yellow]")
+    if marker_path.exists() and not force:
+        console.print(f"[yellow]{marker_path.name} already exists at {marker_path}. Use --force to overwrite.[/yellow]")
         raise typer.Exit(1)
 
     (project_root / "packages").mkdir(parents=True, exist_ok=True)
@@ -68,8 +66,6 @@ def run(
     }
     marker_path.write_text(yaml.safe_dump(marker_data, sort_keys=False), encoding="utf-8")
 
-    if legacy_marker_path.exists():
-        legacy_marker_path.unlink()
 
     _write_if_missing(
         project_root / "plans" / "example.yaml",

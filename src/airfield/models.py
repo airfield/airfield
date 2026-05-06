@@ -110,6 +110,7 @@ class Package(BaseModel):
         raw_default_workdir = data.get("default_workdir")
         if isinstance(raw_default_workdir, str):
             data["default_workdir"] = raw_default_workdir.strip() or None
+
         return cls(**data)
 
 class Plan(BaseModel):

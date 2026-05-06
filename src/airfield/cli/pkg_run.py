@@ -64,13 +64,34 @@ def _host_workdir(pkg_dir: Path, pkg) -> str:
 
 
 def run(
-    package_name: str = typer.Argument(..., help="Package name/path (use '.' for current package)"),
+    package_name: Optional[str] = typer.Argument(None, help="Package name/path (or run command if inside a package)"),
     run_name: Optional[str] = typer.Argument(None, help="Run command name from package airfield.yaml", autocompletion=_run_name_autocomplete),
     target_device: str = typer.Option("x86_64", "--target-device", help="Target architecture for dependency resolution"),
     args: Optional[str] = typer.Option(None, "--args", "-a", help="Extra arguments appended to the configured run command"),
     execution: str = typer.Option("auto", "--execution", "-x", help="Execution mode: auto, container, or host"),
 ):
     """Run a named package command defined in airfield.yaml."""
+    actual_package_name = package_name
+    actual_run_name = run_name
+
+    if package_name is not None and run_name is None:
+        from airfield.config import find_package_root, AIRFIELD_CONFIG
+        from airfield.models import Package
+        local_pkg_dir = find_package_root()
+        if local_pkg_dir is not None:
+            local_pkg_yaml = local_pkg_dir / AIRFIELD_CONFIG
+            if local_pkg_yaml.exists():
+                try:
+                    local_pkg = Package.load(local_pkg_yaml)
+                    if local_pkg.run and package_name in local_pkg.run:
+                        actual_package_name = None
+                        actual_run_name = package_name
+                except Exception:
+                    pass
+
+    package_name = actual_package_name
+    run_name = actual_run_name
+
     console.print(f"[dim]Loading package {package_name or '(auto)'}...[/dim]")
     pkg_dir, pkg, deps, source_root = resolve_package_context(package_name, target_device=target_device)
 

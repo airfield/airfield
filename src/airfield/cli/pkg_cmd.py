@@ -15,8 +15,8 @@ from airfield.cli.package_exec import (
 
 
 def run(
-    package_name: str = typer.Argument(..., help="Package name/path (use '.' for current package)"),
-    command: List[str] = typer.Argument(..., help="Command to execute inside the package container"),
+    package_name: Optional[str] = typer.Argument(None, help="Package name/path (or first word of command if inside a package)"),
+    command: Optional[List[str]] = typer.Argument(None, help="Command to execute inside the package container"),
     target_device: str = typer.Option("x86_64", "--target-device", help="Target architecture for dependency resolution"),
 ):
     """Run a command directly in the package container with source mounted."""
@@ -25,6 +25,40 @@ def run(
             "Already inside an Airfield container. "
             "Use the command directly on the host shell instead."
         )
+
+    actual_package_name = package_name
+    actual_command = command or []
+
+    if package_name is not None:
+        from airfield.config import find_package_root, AIRFIELD_CONFIG
+        # Check if we are inside a package
+        local_pkg_dir = find_package_root()
+        if local_pkg_dir is not None:
+            # We are inside a package. Is package_name actually a package or just part of the command?
+            # If package_name is not a directory or a known package in a project, we assume it's part of the command.
+            from pathlib import Path
+            candidate = Path(package_name).expanduser()
+            
+            is_valid_package = False
+            if candidate.exists() and (candidate / AIRFIELD_CONFIG).exists():
+                is_valid_package = True
+            else:
+                from airfield.config import find_project_root, packages_dir
+                root = find_project_root()
+                if root:
+                    pkg_dir_candidate = packages_dir(root) / package_name
+                    if pkg_dir_candidate.exists():
+                        is_valid_package = True
+
+            if not is_valid_package:
+                actual_package_name = None
+                actual_command = [package_name] + actual_command
+
+    if not actual_command:
+        raise typer.BadParameter("Missing command to execute.")
+
+    package_name = actual_package_name
+    command = actual_command
 
     print(f"Loading package {package_name or '(auto)'}...")
     pkg_dir, pkg, deps, source_root = resolve_package_context(package_name, target_device=target_device)

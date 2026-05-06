@@ -5,7 +5,7 @@ import typer
 from rich.console import Console
 
 from airfield.cli.docker_cleanup import cleanup_package_container_artifacts
-from airfield.config import AIRFIELD_CONFIG, LEGACY_PROJECT_MARKER, require_project_root
+from airfield.config import AIRFIELD_CONFIG, require_project_root
 
 console = Console()
 
@@ -33,7 +33,6 @@ def run(
 
     targets = [
         project_root / AIRFIELD_CONFIG,
-        project_root / LEGACY_PROJECT_MARKER,
         project_root / ".airfield",
         project_root / "plans" / "example.yaml",
         project_root / "dependencies" / "x86_64" / "README.md",

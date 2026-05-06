@@ -12,7 +12,7 @@ import typer
 import yaml
 
 from airfield.builder import Builder
-from airfield.config import AIRFIELD_CONFIG, AIRFIELD_LOCAL_CONFIG, LEGACY_PACKAGE_MARKER, dependencies_dir, find_project_root, packages_dir, require_package_root
+from airfield.config import AIRFIELD_CONFIG, AIRFIELD_LOCAL_CONFIG, dependencies_dir, find_project_root, packages_dir, require_package_root
 from airfield.host_check import detect_host_facts, evaluate_host_dependencies
 from airfield.models import Dependency, Package, SUPPORTED_ROS_DISTROS
 
@@ -77,13 +77,9 @@ def resolve_package_context(
 
     pkg_yaml = pkg_dir / AIRFIELD_CONFIG
     if not pkg_yaml.exists():
-        legacy_pkg_yaml = pkg_dir / LEGACY_PACKAGE_MARKER
-        if legacy_pkg_yaml.exists():
-            pkg_yaml = legacy_pkg_yaml
-        else:
-            raise typer.BadParameter(
-                f"Package config not found at {pkg_dir / AIRFIELD_CONFIG}"
-            )
+        raise typer.BadParameter(
+            f"Package config not found at {pkg_dir / AIRFIELD_CONFIG}"
+        )
 
     pkg = Package.load(pkg_yaml)
     _resolve_package_ros_distro(pkg, root)

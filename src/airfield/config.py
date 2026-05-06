@@ -8,8 +8,6 @@ import yaml
 
 AIRFIELD_CONFIG = "airfield.yaml"
 AIRFIELD_LOCAL_CONFIG = ".air"
-LEGACY_PROJECT_MARKER = "project.yaml"
-LEGACY_PACKAGE_MARKER = "package.yaml"
 PACKAGES_GITHUB_REPO = "https://github.com/airfield/packages.git"
 
 
@@ -107,11 +105,6 @@ def _airfield_kind_in_dir(path: Path) -> Optional[str]:
             if "source_path" in data:
                 return "package"
             return "project"
-
-    if (path / LEGACY_PACKAGE_MARKER).exists():
-        return "package"
-    if (path / LEGACY_PROJECT_MARKER).exists():
-        return "project"
 
     return None
 

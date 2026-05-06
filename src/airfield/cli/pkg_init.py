@@ -6,7 +6,7 @@ import typer
 import yaml
 from rich.console import Console
 
-from airfield.config import AIRFIELD_CONFIG, LEGACY_PACKAGE_MARKER, find_project_root, packages_dir
+from airfield.config import AIRFIELD_CONFIG, find_project_root, packages_dir
 from airfield.models import SUPPORTED_ROS_DISTROS
 from airfield.docker_cache import generate_dockerignore
 
@@ -109,9 +109,6 @@ def _init_new_package(name: str, force: bool, ros_distro: str) -> None:
     }
 
     _write_airfield_yaml(pkg_dir / AIRFIELD_CONFIG, package_yaml, force=force)
-    legacy_marker = pkg_dir / LEGACY_PACKAGE_MARKER
-    if legacy_marker.exists():
-        legacy_marker.unlink()
 
     readme_path = pkg_dir / "README.md"
     if not readme_path.exists():
@@ -148,9 +145,6 @@ def _wrap_existing_ros_package(path: Path, force: bool, ros_distro: str) -> None
     }
 
     _write_airfield_yaml(pkg_dir / AIRFIELD_CONFIG, package_yaml, force=force)
-    legacy_marker = pkg_dir / LEGACY_PACKAGE_MARKER
-    if legacy_marker.exists():
-        legacy_marker.unlink()
 
     airfield_note = pkg_dir / "AIRFIELD.md"
     if not airfield_note.exists():
