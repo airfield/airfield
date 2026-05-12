@@ -2,13 +2,12 @@ import os
 import pwd
 import shutil
 import subprocess
-import sys
 import tempfile
-import time
 from pathlib import Path
 from typing import List, Optional, Tuple
 
 from airfield.models import Dependency, Package
+from airfield.build_progress import run_build_with_progress, with_plain_progress
 from airfield.docker_cache import get_cache_optimization_comment
 
 
@@ -280,7 +279,12 @@ class Builder:
                 if result.stderr:
                     print(result.stderr)
             else:
-                result = self._run_with_loading_indicator(cmd=cmd, cwd=str(context_dir), env=env)
+                result = run_build_with_progress(
+                    cmd=with_plain_progress(cmd),
+                    cwd=str(context_dir),
+                    env=env,
+                    image_name=image_name,
+                )
 
             if result.returncode != 0 and cache_mounts_enabled:
                 stderr_text = (result.stderr or "").lower()
@@ -302,7 +306,12 @@ class Builder:
                         if result.stderr:
                             print(result.stderr)
                     else:
-                        result = self._run_with_loading_indicator(cmd=cmd, cwd=str(context_dir), env=env)
+                        result = run_build_with_progress(
+                            cmd=with_plain_progress(cmd),
+                            cwd=str(context_dir),
+                            env=env,
+                            image_name=image_name,
+                        )
 
             if result.returncode != 0:
                 if not show_all_output:
@@ -311,34 +320,3 @@ class Builder:
                 return False, image_name
 
             return True, image_name
-
-    def _run_with_loading_indicator(self, cmd: List[str], cwd: str, env=None) -> subprocess.CompletedProcess:
-        process = subprocess.Popen(
-            cmd,
-            cwd=cwd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            env=env,
-        )
-
-        spinner = "|/-\\"
-        idx = 0
-        last_non_tty_update = 0.0
-        while process.poll() is None:
-            if sys.stdout.isatty():
-                frame = spinner[idx % len(spinner)]
-                print(f"\rContainer is building... {frame}", end="", flush=True)
-                idx += 1
-            else:
-                now = time.monotonic()
-                if now - last_non_tty_update >= 5.0:
-                    print("Container is building...")
-                    last_non_tty_update = now
-            time.sleep(0.15)
-
-        if sys.stdout.isatty():
-            print("\rContainer build finished.     ")
-
-        stdout, stderr = process.communicate()
-        return subprocess.CompletedProcess(cmd, process.returncode, stdout=stdout, stderr=stderr)
