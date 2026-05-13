@@ -67,9 +67,24 @@ class Builder:
         return DOCKER_PLATFORMS.get(self.target_device.strip().lower())
 
     def _find_airfield_repo(self, context_dir: Path) -> Optional[Path]:
-        for candidate in [context_dir, *context_dir.parents]:
+        # Candidates for the airfield repository root:
+        # 1. The context directory and its parents
+        # 2. The directory where the airfield source code resides (3 levels up from this file: src/airfield/builder.py)
+        candidates = [context_dir, *context_dir.parents]
+        try:
+            candidates.append(Path(__file__).resolve().parents[2])
+        except (IndexError, ValueError):
+            pass
+
+        for candidate in candidates:
+            if not candidate.exists():
+                continue
+            # Check if the candidate itself is the repo root
+            if (candidate / "pyproject.toml").exists() and (candidate / "src" / "airfield").exists():
+                return candidate
+            # Check if there is an 'airfield' subdirectory that is the repo root
             repo_root = candidate / "airfield"
-            if (repo_root / "pyproject.toml").exists() and (repo_root / "src" / "airfield").exists():
+            if repo_root.exists() and (repo_root / "pyproject.toml").exists() and (repo_root / "src" / "airfield").exists():
                 return repo_root
         return None
 
@@ -160,6 +175,14 @@ class Builder:
             )
         else:
             lines.append(f"RUN {apt_install}")
+
+        if cache_mounts_enabled:
+            lines.append(
+                "RUN --mount=type=cache,target=/root/.cache/pip \\\n"
+                "    python3 -m pip install --upgrade pip"
+            )
+        else:
+            lines.append("RUN python3 -m pip install --upgrade pip")
 
         if install_local_airfield:
             lines.append("COPY airfield /opt/airfield")
