@@ -1,7 +1,6 @@
 import typer
 from rich.console import Console
 import subprocess
-from typing import Optional
 
 from airfield.cli.package_exec import (
     build_package_image,

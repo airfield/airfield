@@ -256,6 +256,7 @@ Example package `airfield.yaml`:
 ```yaml
 name: nav_stack
 ros_distro: jazzy
+base_image: ghcr.io/example/nav-stack:latest
 dependencies:
 	- ros_base>=1.3,<2.0
 	- cv_bridge==3.2.1
@@ -266,6 +267,7 @@ source_path: src
 - If working on a new package, you can have a local `dependencies/<target_device>/` folder in the project or standalone package. Airfield will build from it but prints a warning telling you to upstream the manifests with `airfield package dependencies upstream .`.
 - `source_path` is relative to the package directory
 - `ros_distro` selects the ROS base image and workspace overlay
+- `base_image` optionally overrides the generated image's `FROM` line; when omitted, ROS packages use the selected ROS base image and non-ROS packages use `ubuntu:24.04`
 - For wrapped ROS packages, `source_path` is usually `.`
 
 Dependency policy:

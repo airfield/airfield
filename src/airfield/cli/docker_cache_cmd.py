@@ -1,8 +1,6 @@
 """Docker cache management commands for Airfield."""
 
 import subprocess
-import sys
-from typing import Optional
 
 import typer
 from rich.console import Console

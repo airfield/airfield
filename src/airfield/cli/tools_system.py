@@ -13,12 +13,38 @@ from rich.console import Console
 
 from airfield import __version__
 from airfield.cli.docker_cleanup import cleanup_all_airfield_containers
-from airfield.cli.doctor import _install_completion, _completion_configured, _shell_rc_path
+from airfield.cli.doctor import _install_completion, _shell_rc_path
 
 console = Console()
 
 
-def run():
+def _prune_build_cache() -> None:
+    try:
+        result = subprocess.run(
+            ["docker", "builder", "prune", "-f"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        console.print("[yellow]Docker not found; skipping BuildKit cache prune.[/yellow]")
+        raise typer.Exit(1)
+
+    if result.returncode != 0:
+        console.print("[red]Failed to prune BuildKit cache.[/red]")
+        details = (result.stderr or result.stdout or "").strip()
+        if details:
+            console.print(details)
+        raise typer.Exit(1)
+
+    console.print("[bold green]Pruned BuildKit cache.[/bold green]")
+    if result.stdout:
+        console.print(result.stdout.strip())
+
+
+def run(
+    cache: bool = typer.Option(False, "--cache", help="Prune Docker BuildKit cache"),
+):
     """Remove all containers created from Airfield package images."""
     try:
         removed = cleanup_all_airfield_containers()
@@ -27,6 +53,8 @@ def run():
         raise typer.Exit(1)
 
     console.print(f"[bold green]Removed {removed} Airfield container(s).[/bold green]")
+    if cache:
+        _prune_build_cache()
 
 
 # Update check implementation
