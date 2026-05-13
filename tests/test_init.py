@@ -1,5 +1,3 @@
-import pytest
-from pathlib import Path
 from airfield.main import app
 
 def test_project_init(cli_runner, temp_workspace):

@@ -1,12 +1,12 @@
 import re
 import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 from rich.console import Console, Group
-from rich.live import Live
 from rich.panel import Panel
 from rich.spinner import Spinner
 from rich.text import Text
@@ -62,59 +62,36 @@ def run_build_with_progress(
     stderr_lines: List[str] = []
     reader_errors: List[BaseException] = []
 
-    def read_stream(stream, output: List[str]) -> None:
+    def read_stream(stream, output: List[str], mirror) -> None:
         try:
             if stream is None:
                 return
             for line in stream:
                 output.append(line)
+                mirror.write(line)
+                mirror.flush()
                 with progress_lock:
                     apply_docker_progress_line(progress, line)
         except BaseException as exc:
             reader_errors.append(exc)
 
-    stdout_thread = threading.Thread(target=read_stream, args=(process.stdout, stdout_lines), daemon=True)
-    stderr_thread = threading.Thread(target=read_stream, args=(process.stderr, stderr_lines), daemon=True)
+    stdout_thread = threading.Thread(target=read_stream, args=(process.stdout, stdout_lines, sys.stdout), daemon=True)
+    stderr_thread = threading.Thread(target=read_stream, args=(process.stderr, stderr_lines, sys.stderr), daemon=True)
     stdout_thread.start()
     stderr_thread.start()
 
-    last_non_tty_update = 0.0
-    if console.is_terminal:
-        with Live(
-            build_progress_panel(progress),
-            console=console,
-            refresh_per_second=8,
-            transient=False,
-        ) as live:
-            while process.poll() is None:
-                with progress_lock:
-                    live.update(build_progress_panel(progress))
-                time.sleep(0.12)
-            stdout_thread.join()
-            stderr_thread.join()
-            with progress_lock:
-                progress.status = "finished" if process.returncode == 0 else "failed"
-                live.update(build_progress_panel(progress, finished=True, success=process.returncode == 0))
-    else:
-        while process.poll() is None:
-            now = time.monotonic()
-            if now - last_non_tty_update >= 5.0:
-                with progress_lock:
-                    print_non_tty_progress(progress)
-                last_non_tty_update = now
-            time.sleep(0.15)
-        stdout_thread.join()
-        stderr_thread.join()
-        with progress_lock:
-            progress.status = "finished" if process.returncode == 0 else "failed"
-            print_non_tty_progress(progress, finished=True)
+    returncode = process.wait()
+    stdout_thread.join()
+    stderr_thread.join()
+    with progress_lock:
+        progress.status = "finished" if returncode == 0 else "failed"
 
     for exc in reader_errors:
         raise exc
 
     stdout = "".join(stdout_lines)
     stderr = "".join(stderr_lines)
-    return subprocess.CompletedProcess(cmd, process.returncode, stdout=stdout, stderr=stderr)
+    return subprocess.CompletedProcess(cmd, returncode, stdout=stdout, stderr=stderr)
 
 
 def clean_docker_line(line: str) -> str:

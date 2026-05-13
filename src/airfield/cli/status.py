@@ -146,7 +146,8 @@ def _print_package_status(package_root: Path, project_root: Optional[Path], targ
     console.print(f"manifest: {manifest_path.name}")
     console.print(f"name: {package_name}")
     console.print(f"kind: {package.get('kind', 'package')}")
-    console.print(f"ros_distro: {package.get('ros_distro', 'jazzy')}")
+    console.print(f"ros_distro: {package.get('ros_distro') or 'none'}")
+    console.print(f"base_image: {package.get('base_image') or 'default'}")
     console.print(f"source_path: {source_path}")
     console.print(f"source_exists: {'yes' if source_root.exists() else 'no'}")
     if project_root is not None:

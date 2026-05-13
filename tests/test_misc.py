@@ -1,4 +1,3 @@
-import pytest
 from airfield.main import app
 
 def test_status_command(cli_runner, mocker):

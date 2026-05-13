@@ -66,6 +66,7 @@ class Package(BaseModel):
     dependency_constraints: Dict[str, str] = Field(default_factory=dict)
     source_path: str = "src"
     ros_distro: Optional[str] = None
+    base_image: Optional[str] = None
     default_workdir: Optional[str] = None
     run: Dict[str, str] = Field(default_factory=dict)
     
@@ -89,6 +90,10 @@ class Package(BaseModel):
         ros_distro = data.get("ros_distro")
         if isinstance(ros_distro, str):
             data["ros_distro"] = ros_distro.strip().lower() or None
+
+        base_image = data.get("base_image")
+        if isinstance(base_image, str):
+            data["base_image"] = base_image.strip() or None
 
         raw_run = data.get("run", {})
         if raw_run is None:

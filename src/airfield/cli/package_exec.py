@@ -17,33 +17,17 @@ from airfield.host_check import detect_host_facts, evaluate_host_dependencies
 from airfield.models import Dependency, Package, SUPPORTED_ROS_DISTROS
 
 
-def _load_ros_distro(project_root: Optional[Path]) -> Optional[str]:
-    if project_root is None:
+def _resolve_package_ros_distro(pkg: Package, project_root: Optional[Path]) -> Optional[str]:
+    del project_root
+
+    if pkg.ros_distro is None:
         return None
 
-    project_manifest = project_root / AIRFIELD_CONFIG
-    if not project_manifest.exists():
+    ros_distro = pkg.ros_distro.strip().lower()
+    if not ros_distro:
+        pkg.ros_distro = None
         return None
 
-    try:
-        data = yaml.safe_load(project_manifest.read_text(encoding="utf-8"))
-    except Exception:
-        return None
-
-    if not isinstance(data, dict):
-        return None
-
-    ros_distro = data.get("ros_distro")
-    if isinstance(ros_distro, str):
-        ros_distro = ros_distro.strip().lower()
-        if ros_distro:
-            return ros_distro
-    return None
-
-
-def _resolve_package_ros_distro(pkg: Package, project_root: Optional[Path]) -> str:
-    ros_distro = pkg.ros_distro or _load_ros_distro(project_root) or "jazzy"
-    ros_distro = ros_distro.strip().lower()
     if ros_distro not in SUPPORTED_ROS_DISTROS:
         raise typer.BadParameter(
             f"Unsupported ROS distribution '{ros_distro}'. Supported values: {', '.join(sorted(SUPPORTED_ROS_DISTROS))}"

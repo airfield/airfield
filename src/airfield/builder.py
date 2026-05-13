@@ -17,11 +17,20 @@ ROS_BASE_IMAGES = {
     "jazzy": "osrf/ros:jazzy-desktop",
 }
 
+DOCKER_PLATFORMS = {
+    "arm64": "linux/arm64",
+    "aarch64": "linux/arm64",
+    "x86_64": "linux/amd64",
+    "amd64": "linux/amd64",
+}
+
 ROS_CORE_PACKAGES = {
     "noetic": ["python3-catkin-tools"],
     "humble": ["python3-colcon-common-extensions"],
     "jazzy": ["python3-colcon-common-extensions"],
 }
+
+UBUNTU_BASE_IMAGE = "ubuntu:24.04"
 
 
 class Builder:
@@ -30,15 +39,32 @@ class Builder:
         self.dependencies = dependencies
         self.target_device = target_device
         self.ros_distro = self._resolve_ros_distro()
-        self.base_image = ROS_BASE_IMAGES[self.ros_distro]
+        self.base_image = self._resolve_base_image()
 
-    def _resolve_ros_distro(self) -> str:
-        ros_distro = (self.package.ros_distro or "jazzy").strip().lower()
+    def _resolve_ros_distro(self) -> Optional[str]:
+        if self.package.ros_distro is None:
+            return None
+
+        ros_distro = self.package.ros_distro.strip().lower()
+        if not ros_distro:
+            return None
         if ros_distro not in ROS_BASE_IMAGES:
             raise ValueError(
                 f"Unsupported ROS distribution '{ros_distro}'. Supported values: {', '.join(sorted(ROS_BASE_IMAGES))}"
             )
         return ros_distro
+
+    def _resolve_base_image(self) -> str:
+        if self.package.base_image:
+            return self.package.base_image
+        if self.ros_distro == "jazzy" and self.target_device.strip().lower() in {"arm64", "aarch64"}:
+            return "ros:jazzy-ros-base"
+        if self.ros_distro:
+            return ROS_BASE_IMAGES[self.ros_distro]
+        return UBUNTU_BASE_IMAGE
+
+    def _resolve_docker_platform(self) -> Optional[str]:
+        return DOCKER_PLATFORMS.get(self.target_device.strip().lower())
 
     def _find_airfield_repo(self, context_dir: Path) -> Optional[Path]:
         for candidate in [context_dir, *context_dir.parents]:
@@ -72,7 +98,35 @@ class Builder:
         version_text = f"{result.stdout}\n{result.stderr}".lower()
         if "podman" in version_text or "buildah" in version_text:
             return False
+
+        try:
+            buildx_result = subprocess.run(
+                ["docker", "buildx", "version"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except FileNotFoundError:
+            self._print_buildkit_hint("docker buildx was not found")
+            return False
+
+        if buildx_result.returncode != 0:
+            details = (buildx_result.stderr or buildx_result.stdout or "docker buildx version failed").strip()
+            self._print_buildkit_hint(details)
+            return False
         return True
+
+    def _print_buildkit_hint(self, details: str) -> None:
+        print("[WARN] Docker Buildx/BuildKit is not available; using compatibility mode.")
+        if details:
+            print(f"[WARN] Buildx check: {details}")
+        print("[WARN] Install or enable Docker Buildx/BuildKit to use Airfield cache mounts.")
+
+    def _apt_install_command(self, packages: List[str], cache_mounts_enabled: bool) -> str:
+        command = "apt-get update && apt-get install -y " + " ".join(packages)
+        if not cache_mounts_enabled:
+            command += " && rm -rf /var/lib/apt/lists/*"
+        return command
 
     def generate_dockerfile(self, install_local_airfield: bool = False, cache_mounts_enabled: bool = True) -> str:
         lines = []
@@ -87,17 +141,17 @@ class Builder:
         lines.append(f"FROM {self.base_image}")
         lines.append("USER root")
         lines.append("ENV DEBIAN_FRONTEND=noninteractive")
-        lines.append(f"ENV ROS_DISTRO={self.ros_distro}")
+        if self.ros_distro:
+            lines.append(f"ENV ROS_DISTRO={self.ros_distro}")
         lines.append("ARG TORCH_INSTALL_TARGET=cpu")
         lines.append("ARG TORCH_VERSION=")
         lines.append("ARG TORCH_GPU_WHL_TAG=cu121")
         
         # Optimized apt-get with BuildKit cache mounts
-        apt_install = (
-            "apt-get update && apt-get install -y python3-pip python3-opencv git zsh "
-            + " ".join(ROS_CORE_PACKAGES[self.ros_distro])
-            + " && rm -rf /var/lib/apt/lists/*"
-        )
+        base_packages = ["python3-pip", "python3-opencv", "git", "zsh"]
+        if self.ros_distro:
+            base_packages.extend(ROS_CORE_PACKAGES[self.ros_distro])
+        apt_install = self._apt_install_command(base_packages, cache_mounts_enabled=cache_mounts_enabled)
         if cache_mounts_enabled:
             lines.append(
                 "RUN --mount=type=cache,target=/var/lib/apt,sharing=locked \\\n"
@@ -112,8 +166,8 @@ class Builder:
             if cache_mounts_enabled:
                 lines.append(
                     "RUN --mount=type=cache,target=/root/.cache/pip \\\n"
-                    "    python3 -m pip install --no-cache-dir /opt/airfield || \\\n"
-                    "    python3 -m pip install --no-cache-dir --break-system-packages /opt/airfield"
+                    "    python3 -m pip install /opt/airfield || \\\n"
+                    "    python3 -m pip install --break-system-packages /opt/airfield"
                 )
             else:
                 lines.append(
@@ -124,8 +178,8 @@ class Builder:
             if cache_mounts_enabled:
                 lines.append(
                     "RUN --mount=type=cache,target=/root/.cache/pip \\\n"
-                    "    python3 -m pip install --no-cache-dir airfield || \\\n"
-                    "    python3 -m pip install --no-cache-dir --break-system-packages airfield"
+                    "    python3 -m pip install airfield || \\\n"
+                    "    python3 -m pip install --break-system-packages airfield"
                 )
             else:
                 lines.append(
@@ -172,16 +226,17 @@ class Builder:
             "chown -R $UID:$GID /home/$USERNAME/.oh-my-zsh /home/$USERNAME/.zshrc"
         )
         lines.append("RUN mkdir -p /home/$USERNAME/workspace/src && chown -R $UID:$GID /home/$USERNAME")
-        lines.append(
-            "RUN printf '%s\\n' 'source /opt/ros/$ROS_DISTRO/setup.bash' >> /home/$USERNAME/.bashrc && "
-            "printf '%s\\n' 'if [ -f /home/$USERNAME/workspace/install/setup.bash ]; then source /home/$USERNAME/workspace/install/setup.bash; fi' >> /home/$USERNAME/.bashrc && "
-            "printf '%s\\n' 'colcon_build() { mkdir -p log && colcon build \"$@\"; }' >> /home/$USERNAME/.bashrc"
-        )
-        lines.append(
-            "RUN printf '%s\\n' 'source /opt/ros/$ROS_DISTRO/setup.zsh' >> /home/$USERNAME/.zshrc && "
-            "printf '%s\\n' 'if [ -f /home/$USERNAME/workspace/install/setup.zsh ]; then source /home/$USERNAME/workspace/install/setup.zsh; fi' >> /home/$USERNAME/.zshrc && "
-            "printf '%s\\n' 'colcon_build() { mkdir -p log && colcon build \"$@\"; }' >> /home/$USERNAME/.zshrc"
-        )
+        if self.ros_distro:
+            lines.append(
+                "RUN printf '%s\\n' 'source /opt/ros/$ROS_DISTRO/setup.bash' >> /home/$USERNAME/.bashrc && "
+                "printf '%s\\n' 'if [ -f /home/$USERNAME/workspace/install/setup.bash ]; then source /home/$USERNAME/workspace/install/setup.bash; fi' >> /home/$USERNAME/.bashrc && "
+                "printf '%s\\n' 'colcon_build() { mkdir -p log && colcon build \"$@\"; }' >> /home/$USERNAME/.bashrc"
+            )
+            lines.append(
+                "RUN printf '%s\\n' 'source /opt/ros/$ROS_DISTRO/setup.zsh' >> /home/$USERNAME/.zshrc && "
+                "printf '%s\\n' 'if [ -f /home/$USERNAME/workspace/install/setup.zsh ]; then source /home/$USERNAME/workspace/install/setup.zsh; fi' >> /home/$USERNAME/.zshrc && "
+                "printf '%s\\n' 'colcon_build() { mkdir -p log && colcon build \"$@\"; }' >> /home/$USERNAME/.zshrc"
+            )
 
         lines.append("USER $USERNAME")
         lines.append("ENV HOME=/home/$USERNAME")
@@ -204,6 +259,9 @@ class Builder:
         return "\n".join(lines)
 
     def build(self, context_dir: Path, show_all_output: bool = False) -> Tuple[bool, str]:
+        # Docker output now streams by default; keep this parameter for CLI compatibility.
+        del show_all_output
+
         image_name = f"airfield-pkg-{self.package.name}:latest"
 
         with tempfile.TemporaryDirectory() as td:
@@ -238,6 +296,8 @@ class Builder:
 
             cmd = [
                 "docker", "build",
+                "--platform", self._resolve_docker_platform() or self.target_device,
+                "--pull",
                 "--build-arg", f"UID={uid}",
                 "--build-arg", f"GID={gid}",
                 "--build-arg", f"USERNAME={username}",
@@ -260,7 +320,10 @@ class Builder:
 
             # Enable BuildKit for optimized caching
             env = os.environ.copy()
-            env["DOCKER_BUILDKIT"] = "1"
+            if cache_mounts_enabled:
+                env["DOCKER_BUILDKIT"] = "1"
+            else:
+                env.pop("DOCKER_BUILDKIT", None)
 
             print(f"Executing: {' '.join(cmd)}")
             print("--- Dockerfile ---")
@@ -272,19 +335,12 @@ class Builder:
                 print("(BuildKit cache mounts enabled for optimized rebuilds)")
             else:
                 print("(Cache mounts disabled for this engine; using compatibility mode)")
-            if show_all_output:
-                result = subprocess.run(cmd, cwd=str(context_dir), text=True, env=env, capture_output=True)
-                if result.stdout:
-                    print(result.stdout)
-                if result.stderr:
-                    print(result.stderr)
-            else:
-                result = run_build_with_progress(
-                    cmd=with_plain_progress(cmd),
-                    cwd=str(context_dir),
-                    env=env,
-                    image_name=image_name,
-                )
+            result = run_build_with_progress(
+                cmd=with_plain_progress(cmd) if cache_mounts_enabled else cmd,
+                cwd=str(context_dir),
+                env=env,
+                image_name=image_name,
+            )
 
             if result.returncode != 0 and cache_mounts_enabled:
                 stderr_text = (result.stderr or "").lower()
@@ -296,27 +352,19 @@ class Builder:
                         cache_mounts_enabled=False,
                     )
                     df_path.write_text(dockerfile_content, encoding="utf-8")
+                    env = os.environ.copy()
+                    env.pop("DOCKER_BUILDKIT", None)
                     print("--- Dockerfile (compatibility mode) ---")
                     print(dockerfile_content)
                     print("----------------------------------------")
-                    if show_all_output:
-                        result = subprocess.run(cmd, cwd=str(context_dir), text=True, env=env, capture_output=True)
-                        if result.stdout:
-                            print(result.stdout)
-                        if result.stderr:
-                            print(result.stderr)
-                    else:
-                        result = run_build_with_progress(
-                            cmd=with_plain_progress(cmd),
-                            cwd=str(context_dir),
-                            env=env,
-                            image_name=image_name,
-                        )
+                    result = run_build_with_progress(
+                        cmd=cmd,
+                        cwd=str(context_dir),
+                        env=env,
+                        image_name=image_name,
+                    )
 
             if result.returncode != 0:
-                if not show_all_output:
-                    print(result.stdout)
-                    print(result.stderr)
                 return False, image_name
 
             return True, image_name

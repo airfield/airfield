@@ -1,7 +1,6 @@
 """Docker build optimization utilities for BuildKit cache mounts."""
 
 from pathlib import Path
-from typing import List
 
 
 # Standard .dockerignore content for optimized builds
