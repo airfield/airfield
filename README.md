@@ -31,6 +31,7 @@ Airfield uses namespaced commands:
 
 - `airfield package ...` for package operations
 - `airfield project ...` for project operations
+- `airfield subprojects ...` for subproject source code operations
 - `airfield system ...` for system setup and maintenance
 - `airfield tools ...` for maintenance tasks
 - `airfield status` for context and runtime status
@@ -45,6 +46,12 @@ Common lifecycle commands:
 - `airfield project init`
 - `airfield project deinit`
 - `airfield project run` (run a package's `default` command, or open a shell)
+- `airfield subprojects status` (check all subprojects for changes)
+- `airfield subprojects commit -m "message"` (commit changes in all subprojects)
+- `airfield subprojects push` (push commits in all subprojects)
+- `airfield subprojects pull` (pull commits in all subprojects)
+- `airfield subprojects stash` (stash changes in all subprojects)
+- `airfield subprojects undo` (undo the last subprojects operation)
 - `airfield system alias` (install `a` shorthand)
 - `airfield system install-completion` (set up shell completion)
 - `airfield system update` (check for new releases)

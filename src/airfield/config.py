@@ -92,6 +92,11 @@ def _load_yaml(path: Path):
     return None
 
 
+def _save_yaml(path: Path, data: dict):
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+
+
 def _airfield_kind_in_dir(path: Path) -> Optional[str]:
     cfg = path / AIRFIELD_CONFIG
     if cfg.exists():
@@ -142,6 +147,17 @@ def require_project_root(start: Optional[Path] = None) -> Path:
             "Not inside an Airfield project. Run 'airfield project init' first or cd into a project root."
         )
     return root
+
+
+def load_project_config(root: Path) -> dict:
+    config_path = root / AIRFIELD_CONFIG
+    data = _load_yaml(config_path)
+    return data if isinstance(data, dict) else {}
+
+
+def save_project_config(root: Path, data: dict):
+    config_path = root / AIRFIELD_CONFIG
+    _save_yaml(config_path, data)
 
 
 def require_package_root(start: Optional[Path] = None) -> Path:

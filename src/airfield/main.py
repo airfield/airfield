@@ -3,7 +3,7 @@ import typer
 from rich.console import Console
 from typer.core import TyperGroup
 
-from airfield.cli import build, dependencies_upstream, doctor, docker_cache_cmd, liftoff, pkg_cmd, pkg_deinit, pkg_init, pkg_run, pkg_shell, proj_deinit, proj_init, run, status, up
+from airfield.cli import build, dependencies_upstream, doctor, docker_cache_cmd, liftoff, pkg_cmd, pkg_deinit, pkg_init, pkg_run, pkg_shell, proj_deinit, proj_init, run, status, subprojects, up
 from airfield.cli import tools_system
 from airfield.config import ensure_airfield_runtime_dirs, find_package_root, find_project_root
 
@@ -54,6 +54,7 @@ tools_app.add_typer(tools_system_app, name="system")
 # Expose `airfield system` as a top-level namespace as well
 app.add_typer(tools_system_app, name="system")
 app.add_typer(docker_app, name="docker")
+app.add_typer(subprojects.app, name="subprojects")
 
 pkg_app.command(name="init")(pkg_init.run)
 pkg_app.command(name="deinit")(pkg_deinit.run)
