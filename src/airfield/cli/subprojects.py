@@ -6,7 +6,6 @@ import time
 
 import typer
 from rich.console import Console
-import click
 
 from airfield.config import find_project_root, load_project_config, save_project_config
 
@@ -108,10 +107,38 @@ def _ahead_behind(cwd: Path) -> (int, int):
     return 0, 0
 
 
-def _confirm(msg: str, auto: bool) -> bool:
+def _confirm(msg: str, auto: bool, diff_callback=None) -> bool:
     if auto:
         return True
-    return typer.confirm(msg, default=False)
+    
+    if diff_callback:
+        prompt_msg = f"{msg} [y/N/d]"
+        while True:
+            response = typer.prompt(prompt_msg, default="N", show_default=False).lower()
+            if response in ["y", "yes"]:
+                return True
+            elif response in ["n", "no", ""]:
+                return False
+            elif response in ["d", "diff"]:
+                diff_callback()
+            else:
+                console.print("Please answer y, n, or d.")
+    else:
+        return typer.confirm(msg, default=False)
+
+
+def _echo_via_more(text: str):
+    lines = text.splitlines()
+    chunk_size = 20
+    for i in range(0, len(lines), chunk_size):
+        for line in lines[i:i+chunk_size]:
+            typer.echo(line)
+        if i + chunk_size < len(lines):
+            typer.echo("--- More --- (Press Enter to continue, 'q' to quit) ", nl=False)
+            c = typer.getchar()
+            typer.echo()
+            if c.lower() == 'q':
+                break
 
 
 @app.command(name="status")
@@ -165,7 +192,23 @@ def cmd_commit(
 
     for sp in subprojects:
         if _is_dirty(sp):
-            if _confirm(f"Commit changes in {sp.name}?", auto):
+            def show_diff(sp_path=sp):
+                status_res = _run_git(["-c", "color.status=always", "status", "-s"], sp_path)
+                diff_res = _run_git(["diff", "--color=always", "HEAD"], sp_path)
+                
+                output = []
+                if status_res.stdout.strip():
+                    output.append("\033[1;33mStatus:\033[0m\n" + status_res.stdout)
+                
+                if diff_res.stdout.strip():
+                    output.append("\033[1;33mDiff:\033[0m\n" + diff_res.stdout)
+                
+                if output:
+                    _echo_via_more("\n".join(output))
+                else:
+                    console.print("No changes found.")
+            
+            if _confirm(f"Commit changes in {sp.name}?", auto, diff_callback=show_diff):
                 head_before = _get_head(sp)
                 _run_git(["add", "-A"], sp)
                 res = _run_git(["commit", "-m", message], sp)
@@ -273,7 +316,23 @@ def cmd_stash(
 
     for sp in subprojects:
         if _is_dirty(sp):
-            if _confirm(f"Stash changes in {sp.name}?", auto):
+            def show_diff(sp_path=sp):
+                status_res = _run_git(["-c", "color.status=always", "status", "-s"], sp_path)
+                diff_res = _run_git(["diff", "--color=always", "HEAD"], sp_path)
+                
+                output = []
+                if status_res.stdout.strip():
+                    output.append("\033[1;33mStatus:\033[0m\n" + status_res.stdout)
+                
+                if diff_res.stdout.strip():
+                    output.append("\033[1;33mDiff:\033[0m\n" + diff_res.stdout)
+                
+                if output:
+                    _echo_via_more("\n".join(output))
+                else:
+                    console.print("No changes found.")
+            
+            if _confirm(f"Stash changes in {sp.name}?", auto, diff_callback=show_diff):
                 res = _run_git(["stash"], sp)
                 if res.returncode == 0 and "No local changes to save" not in res.stdout:
                     console.print(f"[green]Stashed in {sp.name}[/green]")
@@ -481,6 +540,49 @@ def cmd_undo(
 
     _write_log(project_root, log_data)
     console.print("\nUndo complete.")
+
+
+@app.command(name="diff")
+def cmd_diff(
+    staged: bool = typer.Option(False, "--staged", "--cached", help="Show diff of staged changes"),
+    head: bool = typer.Option(False, "--head", help="Show diff of all changes (staged and unstaged)")
+):
+    """Show git diff for all dirty subprojects."""
+    project_root = find_project_root()
+    if not project_root:
+        console.print("[yellow]Not in an Airfield project.[/yellow]")
+        raise typer.Exit(1)
+
+    subprojects = _get_subprojects(project_root)
+    dirty_count = 0
+    full_output = []
+
+    for sp in subprojects:
+        if _is_dirty(sp):
+            dirty_count += 1
+            cmd = ["diff", "--color=always"]
+            if staged:
+                cmd.append("--staged")
+            elif head:
+                cmd.append("HEAD")
+            
+            output = []
+            status_res = _run_git(["-c", "color.status=always", "status", "-s"], sp)
+            if status_res.stdout.strip():
+                output.append("\033[1;33mStatus:\033[0m\n" + status_res.stdout)
+                
+            res = _run_git(cmd, sp)
+            if res.stdout.strip():
+                output.append("\033[1;33mDiff:\033[0m\n" + res.stdout)
+                
+            if output:
+                full_output.append(f"\033[1;34m=== {sp.name} ===\033[0m\n")
+                full_output.append("\n".join(output) + "\n")
+    
+    if dirty_count == 0:
+        console.print("No dirty subprojects found.")
+    elif full_output:
+        _echo_via_more("".join(full_output))
 
 
 @app.callback(invoke_without_command=True)

@@ -1,4 +1,3 @@
-import click
 import typer
 from rich.console import Console
 from typer.core import TyperGroup
@@ -7,11 +6,12 @@ from airfield.cli import build, dependencies_upstream, doctor, docker_cache_cmd,
 from airfield.cli import tools_system
 from airfield.config import ensure_airfield_runtime_dirs, find_package_root, find_project_root
 
+console = Console()
 
 class PrefixGroup(TyperGroup):
     """Click group with unique-prefix command resolution for registered commands."""
 
-    def get_command(self, ctx: click.Context, cmd_name: str):
+    def get_command(self, ctx: typer.Context, cmd_name: str):
         command = super().get_command(ctx, cmd_name)
         if command is not None:
             return command
@@ -31,15 +31,13 @@ class PrefixGroup(TyperGroup):
             return next(iter(unique.values()))[1]
         if len(unique) > 1:
             choices = sorted({name for name, _ in matches})
-            raise click.UsageError(
-                f"Command '{cmd_name}' is ambiguous. Matches: {', '.join(choices)}"
-            )
+            console.print(f"[red]Error:[/red] Command '{cmd_name}' is ambiguous. Matches: {', '.join(choices)}")
+            raise typer.Exit(1)
 
         return None
 
 
 app = typer.Typer(help="Airfield: The robotics orchestration framework", cls=PrefixGroup)
-console = Console()
 
 pkg_app = typer.Typer(help="Package operations", cls=PrefixGroup, invoke_without_command=True)
 proj_app = typer.Typer(help="Project operations", cls=PrefixGroup, invoke_without_command=True)

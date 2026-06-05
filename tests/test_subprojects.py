@@ -216,3 +216,35 @@ def test_subprojects_checkout(cli_runner, temp_workspace):
     sub1_path = temp_workspace / "src" / "sub1"
     assert sub1_path.exists()
     assert (sub1_path / ".git").exists()
+
+
+def test_subprojects_diff(cli_runner, temp_workspace):
+    cli_runner.invoke(app, ["project", "init", "."])
+    sub1 = temp_workspace / "src" / "sub1"
+    sub1.mkdir(parents=True)
+    setup_git_repo(sub1)
+    
+    # No dirty subprojects
+    result = cli_runner.invoke(app, ["subprojects", "diff"])
+    assert result.exit_code == 0
+    assert "No dirty subprojects found." in result.output
+    
+    # Make it dirty
+    (sub1 / "file.txt").write_text("changed\n")
+    
+    result = cli_runner.invoke(app, ["subprojects", "diff"])
+    assert result.exit_code == 0
+    assert "=== sub1 ===" in result.output
+    assert "changed" in result.output
+    assert "initial" in result.output
+    
+    # Stage changes
+    subprocess.run(["git", "add", "file.txt"], cwd=sub1, check=True)
+    
+    # diff --staged
+    result = cli_runner.invoke(app, ["subprojects", "diff", "--staged"])
+    assert result.exit_code == 0
+    assert "=== sub1 ===" in result.output
+    assert "changed" in result.output
+
+
