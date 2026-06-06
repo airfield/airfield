@@ -51,6 +51,7 @@ Common lifecycle commands:
 - `airfield subprojects push` (push commits in all subprojects)
 - `airfield subprojects pull` (pull commits in all subprojects)
 - `airfield subprojects stash` (stash changes in all subprojects)
+- `airfield subprojects clean` (clean and reset all subprojects to match remote)
 - `airfield subprojects undo` (undo the last subprojects operation)
 - `airfield system alias` (install `a` shorthand)
 - `airfield system install-completion` (set up shell completion)

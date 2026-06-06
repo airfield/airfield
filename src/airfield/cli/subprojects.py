@@ -349,6 +349,60 @@ def cmd_stash(
     console.print(f"\nStashed in {len(affected)} subprojects.")
 
 
+@app.command(name="clean")
+def cmd_clean(
+    force: bool = typer.Option(False, "--force", "-f", help="Clean all changes without confirmation and only log")
+):
+    """Log, stash, and clean all changes in dirty subprojects."""
+    project_root = find_project_root()
+    if not project_root:
+        if not force:
+            console.print("[yellow]Not in an Airfield project.[/yellow]")
+        raise typer.Exit(1)
+
+    subprojects = _get_subprojects(project_root)
+    affected = []
+
+    for sp in subprojects:
+        if _is_dirty(sp):
+            if not force:
+                def show_diff(sp_path=sp):
+                    status_res = _run_git(["-c", "color.status=always", "status", "-s"], sp_path)
+                    diff_res = _run_git(["diff", "--color=always", "HEAD"], sp_path)
+                    
+                    output = []
+                    if status_res.stdout.strip():
+                        output.append("\033[1;33mStatus:\033[0m\n" + status_res.stdout)
+                    
+                    if diff_res.stdout.strip():
+                        output.append("\033[1;33mDiff:\033[0m\n" + diff_res.stdout)
+                    
+                    if output:
+                        _echo_via_more("\n".join(output))
+                    else:
+                        console.print("No changes found.")
+                
+                if not _confirm(f"Clean changes in {sp.name}?", False, diff_callback=show_diff):
+                    console.print(f"Skipped {sp.name}")
+                    continue
+
+            # Stash everything including untracked, then hard reset and clean
+            _run_git(["stash", "-u"], sp)
+            _run_git(["reset", "--hard", "HEAD"], sp)
+            _run_git(["clean", "-fd"], sp)
+            
+            if not force:
+                console.print(f"[green]Cleaned in {sp.name}[/green]")
+            affected.append({
+                "path": str(sp.relative_to(project_root)),
+                "cleaned": True
+            })
+
+    _record_operation(project_root, "clean", affected)
+    if not force:
+        console.print(f"\nCleaned in {len(affected)} subprojects.")
+
+
 def _get_remote_url(cwd: Path) -> Optional[str]:
     res = _run_git(["config", "--get", "remote.origin.url"], cwd)
     if res.returncode == 0 and res.stdout.strip():
@@ -534,6 +588,15 @@ def cmd_undo(
                     console.print(f"[green]Undid stash in {sp.name}[/green]")
                 else:
                     console.print(f"[red]Failed to pop stash in {sp.name}[/red]:\n{res.stderr}")
+                    
+        elif op_name == "clean":
+            # Undo clean
+            if item.get("cleaned"):
+                res = _run_git(["stash", "pop"], sp)
+                if res.returncode == 0:
+                    console.print(f"[green]Undid clean in {sp.name}[/green]")
+                else:
+                    console.print(f"[yellow]Could not pop stash in {sp.name} (might be clean)[/yellow]")
                     
         else:
             console.print(f"[yellow]Unknown operation {op_name} in log[/yellow]")

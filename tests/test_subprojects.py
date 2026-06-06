@@ -248,3 +248,36 @@ def test_subprojects_diff(cli_runner, temp_workspace):
     assert "changed" in result.output
 
 
+
+def test_subprojects_clean_and_undo(cli_runner, temp_workspace):
+    cli_runner.invoke(app, ["project", "init", "."])
+    sub1 = temp_workspace / "src" / "sub1"
+    sub1.mkdir(parents=True)
+    setup_git_repo(sub1)
+    
+    (sub1 / "file.txt").write_text("changed\n")
+    (sub1 / "untracked.txt").write_text("untracked\n")
+    
+    result = cli_runner.invoke(app, ["subprojects", "clean", "--force"])
+    assert result.exit_code == 0
+    # because of --force, it should only log and have no output printed to console
+    # Wait, the output for --force should be empty or at least no confirmation prompts.
+    # Actually wait, let's verify if the file is clean.
+    
+    status_result = cli_runner.invoke(app, ["subprojects", "status"])
+    assert "sub1: up to date" in status_result.output
+    
+    # Check untracked is gone
+    assert not (sub1 / "untracked.txt").exists()
+    assert (sub1 / "file.txt").read_text() == "initial\n"
+    
+    # Undo clean
+    undo_result = cli_runner.invoke(app, ["subprojects", "undo", "--auto"])
+    assert undo_result.exit_code == 0
+    assert "Undid clean in sub1" in undo_result.output
+    
+    # Wait, undo clean (stash pop) should restore the changed file and untracked file
+    status_result2 = cli_runner.invoke(app, ["subprojects", "status"])
+    assert "sub1: dirty" in status_result2.output
+    assert (sub1 / "untracked.txt").exists()
+    assert (sub1 / "file.txt").read_text() == "changed\n"
