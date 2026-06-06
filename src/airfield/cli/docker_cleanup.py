@@ -28,7 +28,9 @@ def cleanup_package_container_artifacts(package_root: Path) -> None:
     subprocess.run(["docker", "rmi", "-f", image_name], check=False)
 
 
-def cleanup_all_airfield_containers() -> int:
+from typing import Optional
+
+def cleanup_all_airfield_containers(until: Optional[str] = None) -> int:
     result = subprocess.run(
         ["docker", "images", "--format", "{{.Repository}}:{{.Tag}}"],
         capture_output=True,
@@ -46,8 +48,12 @@ def cleanup_all_airfield_containers() -> int:
 
     removed = 0
     for image_name in sorted(set(image_names)):
+        ps_cmd = ["docker", "ps", "-aq", "--filter", f"ancestor={image_name}"]
+        if until:
+            ps_cmd.extend(["--filter", f"until={until}"])
+
         container_result = subprocess.run(
-            ["docker", "ps", "-aq", "--filter", f"ancestor={image_name}"],
+            ps_cmd,
             capture_output=True,
             text=True,
             check=False,

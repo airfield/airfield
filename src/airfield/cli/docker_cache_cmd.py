@@ -27,7 +27,9 @@ def cache_status():
         raise typer.Exit(1)
 
 
-def cache_prune(aggressive: bool = False):
+from typing import Optional
+
+def cache_prune(aggressive: bool = False, until: Optional[str] = None):
     """Prune Docker BuildKit cache."""
     try:
         if aggressive:
@@ -36,6 +38,9 @@ def cache_prune(aggressive: bool = False):
         else:
             console.print("[yellow]Pruning unused BuildKit cache...[/yellow]")
             cmd = ["docker", "buildx", "prune", "-f"]
+            
+        if until:
+            cmd.extend(["--filter", f"until={until}"])
         
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode == 0:
@@ -53,6 +58,7 @@ def cache_prune(aggressive: bool = False):
 def run(
     action: str = typer.Argument(..., help="Action to perform: status, prune"),
     aggressive: bool = typer.Option(False, "--aggressive", help="For prune: remove all cache including in-use layers"),
+    until: Optional[str] = typer.Option(None, "--until", help="Prune objects older than this duration (e.g., '168h')"),
 ):
     """Manage Docker BuildKit cache for optimized builds.
     
@@ -64,7 +70,7 @@ def run(
     if action == "status":
         cache_status()
     elif action == "prune":
-        cache_prune(aggressive=aggressive)
+        cache_prune(aggressive=aggressive, until=until)
     else:
         console.print(f"[red]Unknown action: {action}[/red]")
         console.print("Valid actions: status, prune")

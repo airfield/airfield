@@ -18,10 +18,16 @@ from airfield.cli.doctor import _install_completion, _shell_rc_path
 console = Console()
 
 
-def _prune_build_cache() -> None:
+def _prune_build_cache(until: Optional[str] = None, aggressive: bool = False) -> None:
     try:
+        cmd = ["docker", "builder", "prune", "-f"]
+        if aggressive:
+            cmd.insert(3, "-a")
+        if until:
+            cmd.extend(["--filter", f"until={until}"])
+            
         result = subprocess.run(
-            ["docker", "builder", "prune", "-f"],
+            cmd,
             capture_output=True,
             text=True,
             check=False,
@@ -44,17 +50,19 @@ def _prune_build_cache() -> None:
 
 def run(
     cache: bool = typer.Option(False, "--cache", help="Prune Docker BuildKit cache"),
+    until: Optional[str] = typer.Option(None, "--until", help="Only remove items older than this duration (e.g., '168h')"),
+    aggressive: bool = typer.Option(False, "--aggressive", help="When used with --cache, remove all build cache including in-use layers"),
 ):
     """Remove all containers created from Airfield package images."""
     try:
-        removed = cleanup_all_airfield_containers()
+        removed = cleanup_all_airfield_containers(until=until)
     except FileNotFoundError:
         console.print("[yellow]Docker not found; skipping container cleanup.[/yellow]")
         raise typer.Exit(1)
 
     console.print(f"[bold green]Removed {removed} Airfield container(s).[/bold green]")
     if cache:
-        _prune_build_cache()
+        _prune_build_cache(until=until, aggressive=aggressive)
 
 
 # Update check implementation
