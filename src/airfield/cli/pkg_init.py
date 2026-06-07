@@ -118,6 +118,7 @@ def _init_new_package(name: str, force: bool, ros_distro: str) -> None:
         )
 
     _ensure_gitignore_entry(pkg_dir, ".air")
+    _ensure_gitignore_entry(pkg_dir, ".airfield/")
     _ensure_gitignore_entry(pkg_dir, "build/")
     _ensure_gitignore_entry(pkg_dir, "log/")
     _ensure_gitignore_entry(pkg_dir, "install/")
@@ -157,6 +158,7 @@ def _wrap_existing_ros_package(path: Path, force: bool, ros_distro: str) -> None
         )
 
     _ensure_gitignore_entry(pkg_dir, ".air")
+    _ensure_gitignore_entry(pkg_dir, ".airfield/")
     _ensure_gitignore_entry(pkg_dir, "build/")
     _ensure_gitignore_entry(pkg_dir, "log/")
     _ensure_gitignore_entry(pkg_dir, "install/")

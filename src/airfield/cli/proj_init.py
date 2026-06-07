@@ -88,6 +88,7 @@ def run(
     )
 
     _ensure_gitignore_entry(project_root, ".air")
+    _ensure_gitignore_entry(project_root, ".airfield/")
     _ensure_gitignore_entry(project_root, "build/")
     _ensure_gitignore_entry(project_root, "log/")
     _ensure_gitignore_entry(project_root, "install/")
