@@ -14,11 +14,15 @@ from rich.console import Console
 from airfield import __version__
 from airfield.cli.docker_cleanup import cleanup_all_airfield_containers
 from airfield.cli.doctor import _install_completion, _shell_rc_path
+from airfield.config import is_arm_mac
 
 console = Console()
 
 
 def _prune_build_cache(until: Optional[str] = None, aggressive: bool = False) -> None:
+    if is_arm_mac():
+        console.print("[yellow]Apple's container tool does not support direct BuildKit builder prune; skipping BuildKit cache prune.[/yellow]")
+        return
     try:
         cmd = ["docker", "builder", "prune", "-f"]
         if aggressive:
@@ -57,7 +61,8 @@ def run(
     try:
         removed = cleanup_all_airfield_containers(until=until)
     except FileNotFoundError:
-        console.print("[yellow]Docker not found; skipping container cleanup.[/yellow]")
+        engine_name = "container" if is_arm_mac() else "Docker"
+        console.print(f"[yellow]{engine_name} not found; skipping container cleanup.[/yellow]")
         raise typer.Exit(1)
 
     console.print(f"[bold green]Removed {removed} Airfield container(s).[/bold green]")
@@ -69,7 +74,7 @@ def run(
 _CACHE_PATH = Path(os.path.expanduser("~")) / ".cache" / "airfield"
 _CACHE_FILE = _CACHE_PATH / "last_update_check.json"
 _GITHUB_REPO = "airfield/airfield"
-_RELEASES_API = f"https://api.github.com/repos/{_GITHUB_REPO}/releases/latest"
+_TAGS_API = f"https://api.github.com/repos/{_GITHUB_REPO}/tags"
 
 
 def _read_cache() -> Optional[dict]:
@@ -133,10 +138,13 @@ def _compare_versions(a: str, b: str) -> int:
 
 
 def check_for_update(force: bool = False, timeout: int = 5) -> Optional[dict]:
-    """Check GitHub releases for a newer version. Returns dict or None on error.
+    """Check GitHub tags for a newer version. Returns dict or None on error.
 
     Cached results are used if present and fresher than 24 hours unless `force`.
     """
+    import re
+    from functools import cmp_to_key
+
     now = time.time()
     cached = _read_cache()
     if not force and cached:
@@ -144,7 +152,7 @@ def check_for_update(force: bool = False, timeout: int = 5) -> Optional[dict]:
         if now - ts < 24 * 3600:
             return cached
 
-    req = urllib.request.Request(_RELEASES_API, headers={"User-Agent": "airfield-update-check"})
+    req = urllib.request.Request(_TAGS_API, headers={"User-Agent": "airfield-update-check"})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read().decode("utf-8")
@@ -161,12 +169,29 @@ def check_for_update(force: bool = False, timeout: int = 5) -> Optional[dict]:
         console.print(f"[yellow]Update-check failed: {exc}[/yellow]")
         return None
 
-    latest_tag = data.get("tag_name") or data.get("name")
-    html_url = data.get("html_url") or f"https://github.com/{_GITHUB_REPO}"
-    if not latest_tag:
+    if not isinstance(data, list):
         if cached:
             return cached
         return None
+
+    # Filter tags matching the vX.X.X pattern
+    semver_pattern = re.compile(r"^v\d+\.\d+\.\d+$", re.IGNORECASE)
+    valid_tags = []
+    for tag_obj in data:
+        if isinstance(tag_obj, dict):
+            name = tag_obj.get("name")
+            if name and semver_pattern.match(name):
+                valid_tags.append(name)
+
+    if not valid_tags:
+        if cached:
+            return cached
+        return None
+
+    # Sort matching tags to find the latest (highest semver version)
+    valid_tags.sort(key=cmp_to_key(_compare_versions), reverse=True)
+    latest_tag = valid_tags[0]
+    html_url = f"https://github.com/{_GITHUB_REPO}/releases/tag/{latest_tag}"
 
     result = {
         "checked_at": now,
@@ -270,3 +295,102 @@ def install_completion(shell_name: str = typer.Argument(...)):
         return
     console.print(f"[red]Completion install failed: {message}[/red]")
     raise typer.Exit(1)
+
+
+def setup():
+    """Set up the local system for Airfield (installs container backend if needed)."""
+    if is_arm_mac():
+        console.print("[dim]Checking Apple container tool installation...[/dim]")
+        container_path = shutil.which("container")
+        if container_path is None:
+            console.print("Apple container tool is not installed. Installing from latest GitHub release...")
+            import tempfile
+            
+            console.print("Resolving latest Apple container tool release from GitHub...")
+            releases_url = "https://api.github.com/repos/apple/container/releases/latest"
+            req = urllib.request.Request(releases_url, headers={"User-Agent": "airfield-setup"})
+            try:
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    assets = data.get("assets", [])
+                    pkg_url = None
+                    for asset in assets:
+                        name = asset.get("name", "")
+                        if name.endswith(".pkg"):
+                            pkg_url = asset.get("browser_download_url")
+                            break
+                    if not pkg_url:
+                        console.print("[red]Error: Could not find a .pkg installer asset in the latest GitHub release.[/red]")
+                        raise typer.Exit(1)
+            except Exception as exc:
+                console.print(f"[red]Error: Failed to fetch latest GitHub release: {exc}[/red]")
+                raise typer.Exit(1)
+
+            try:
+                temp_dir = Path(tempfile.gettempdir())
+                pkg_path = temp_dir / "apple-container-installer.pkg"
+                console.print(f"Downloading installer from {pkg_url}...")
+                req_dl = urllib.request.Request(pkg_url, headers={"User-Agent": "airfield-setup"})
+                with urllib.request.urlopen(req_dl) as response, open(pkg_path, "wb") as out_file:
+                    shutil.copyfileobj(response, out_file)
+            except Exception as exc:
+                console.print(f"[red]Error: Failed to download installer: {exc}[/red]")
+                raise typer.Exit(1)
+
+            console.print("Installing Apple container tool (requires administrator privileges)...")
+            result = subprocess.run(["sudo", "installer", "-pkg", str(pkg_path), "-target", "/"], check=False)
+            
+            # Clean up installer
+            try:
+                pkg_path.unlink()
+            except Exception:
+                pass
+
+            if result.returncode != 0:
+                console.print("[red]Error: Failed to install container tool via installer package.[/red]")
+                raise typer.Exit(1)
+
+            container_path = shutil.which("container") or "/usr/local/bin/container"
+            if not Path(container_path).exists():
+                console.print(f"[red]Error: container tool not found at {container_path} after installation.[/red]")
+                raise typer.Exit(1)
+            console.print("[green]Installed Apple container tool successfully.[/green]")
+        else:
+            console.print(f"[green]Apple container tool is already installed at {container_path}.[/green]")
+
+        # Apply Homebrew plugin path workaround to prevent apiserver hang (only if Homebrew was used previously)
+        brew_path = shutil.which("brew")
+        if brew_path is not None:
+            brew_prefix_res = subprocess.run([brew_path, "--prefix"], capture_output=True, text=True, check=False)
+            if brew_prefix_res.returncode == 0:
+                brew_prefix = brew_prefix_res.stdout.strip()
+                target_plugin_dir = Path(brew_prefix) / "libexec" / "container" / "plugins"
+                source_plugin_dir = Path(brew_prefix) / "opt" / "container" / "libexec" / "container-plugins"
+                if source_plugin_dir.exists() and not target_plugin_dir.exists():
+                    try:
+                        target_plugin_dir.parent.mkdir(parents=True, exist_ok=True)
+                        target_plugin_dir.symlink_to(source_plugin_dir)
+                        console.print(f"[green]Applied Homebrew plugin path symlink workaround: {target_plugin_dir} -> {source_plugin_dir}[/green]")
+                    except Exception as exc:
+                        console.print(f"[yellow]Warning: Could not apply Homebrew plugin path workaround: {exc}[/yellow]")
+
+        console.print("[dim]Starting container system service...[/dim]")
+        result_start = subprocess.run([container_path, "system", "start"], check=False)
+        if result_start.returncode != 0:
+            console.print("[red]Error: Failed to start container system service.[/red]")
+            raise typer.Exit(1)
+        console.print("[bold green]Apple container tool is successfully configured and running.[/bold green]")
+    else:
+        console.print("[dim]Checking Docker installation...[/dim]")
+        docker_path = shutil.which("docker")
+        if docker_path is None:
+            console.print("[yellow]Docker is not found in PATH.[/yellow]")
+            console.print("Please install Docker Desktop or compatible container backend (e.g., Podman) for your system.")
+            raise typer.Exit(1)
+        console.print(f"[green]Docker is installed at {docker_path}.[/green]")
+        result = subprocess.run([docker_path, "info"], capture_output=True, check=False)
+        if result.returncode != 0:
+            console.print("[yellow]Docker daemon is not running or not reachable.[/yellow]")
+            console.print("Please start Docker before using Airfield.")
+            raise typer.Exit(1)
+        console.print("[bold green]Docker is successfully configured and running.[/bold green]")

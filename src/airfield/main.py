@@ -73,6 +73,7 @@ proj_app.command(name="run")(run.run)
 proj_app.command(name="liftoff")(liftoff.run)
 
 tools_system_app.command(name="clean")(tools_system.run)
+tools_system_app.command(name="setup")(tools_system.setup)
 tools_system_app.command(name="update")(tools_system.update)
 tools_system_app.command(name="alias")(tools_system.install_alias)
 tools_system_app.command(name="install-completion")(tools_system.install_completion)

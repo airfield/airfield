@@ -1,4 +1,5 @@
 import os
+import platform
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -9,6 +10,22 @@ import yaml
 AIRFIELD_CONFIG = "airfield.yaml"
 AIRFIELD_LOCAL_CONFIG = ".air"
 PACKAGES_GITHUB_REPO = "https://github.com/airfield/packages.git"
+
+
+def is_arm_mac() -> bool:
+    if platform.system() != "Darwin":
+        return False
+    if platform.machine() in ("arm64", "aarch64"):
+        return True
+    try:
+        # sysctl -n hw.optional.arm64 returns 1 on Apple Silicon
+        res = subprocess.run(["sysctl", "-n", "hw.optional.arm64"], capture_output=True, text=True, check=False)
+        if res.returncode == 0 and res.stdout.strip() == "1":
+            return True
+    except Exception:
+        pass
+    return False
+
 
 
 def _xdg_home(env_name: str, fallback_suffix: str) -> Path:
@@ -178,6 +195,33 @@ def dependencies_dir(root: Path, target_device: str) -> Path:
     if local_root.exists() and any(local_root.glob("*.yaml")):
         return local_root
     return packages_repo_root() / target_device
+
+
+def dependency_search_paths(root: Path, target_device: str) -> list[Path]:
+    """Return an ordered list of paths to search for dependency manifests."""
+    paths: list[Path] = []
+
+    # 1. Local project/package specific target
+    local_target = root / "dependencies" / target_device
+    if local_target.exists():
+        paths.append(local_target)
+
+    # 2. Local project/package xplatform
+    local_xplatform = root / "dependencies" / "xplatform"
+    if local_xplatform.exists():
+        paths.append(local_xplatform)
+
+    # 3. Global specific target
+    global_target = packages_repo_root() / target_device
+    if global_target.exists():
+        paths.append(global_target)
+
+    # 4. Global xplatform
+    global_xplatform = packages_repo_root() / "xplatform"
+    if global_xplatform.exists():
+        paths.append(global_xplatform)
+
+    return paths
 
 
 def plans_dir(root: Path) -> Path:

@@ -8,11 +8,11 @@ def mock_package_context(mocker):
     pkg = Package(name="test_pkg")
     pkg.run = {"start": "echo 'starting'"}
     
-    mocker.patch("airfield.cli.build.resolve_package_context", return_value=(None, pkg, [], None))
-    mocker.patch("airfield.cli.pkg_shell.resolve_package_context", return_value=(None, pkg, [], None))
-    mocker.patch("airfield.cli.pkg_run.resolve_package_context", return_value=(None, pkg, [], None))
-    mocker.patch("airfield.cli.pkg_cmd.resolve_package_context", return_value=(None, pkg, [], None))
-    mocker.patch("airfield.cli.run.resolve_package_context", return_value=(None, pkg, [], None))
+    mocker.patch("airfield.cli.build.resolve_package_context", return_value=(Path("."), pkg, [], Path(".")))
+    mocker.patch("airfield.cli.pkg_shell.resolve_package_context", return_value=(Path("."), pkg, [], Path(".")))
+    mocker.patch("airfield.cli.pkg_run.resolve_package_context", return_value=(Path("."), pkg, [], Path(".")))
+    mocker.patch("airfield.cli.pkg_cmd.resolve_package_context", return_value=(Path("."), pkg, [], Path(".")))
+    mocker.patch("airfield.cli.run.resolve_package_context", return_value=(Path("."), pkg, [], Path(".")))
     
     mocker.patch("airfield.cli.build.build_package_image", return_value="test_image")
     mocker.patch("airfield.cli.pkg_shell.build_package_image", return_value="test_image")
@@ -24,6 +24,10 @@ def mock_package_context(mocker):
     mocker.patch("airfield.cli.pkg_run.docker_mount_args", return_value=[])
     mocker.patch("airfield.cli.pkg_cmd.docker_mount_args", return_value=[])
     mocker.patch("airfield.cli.run.docker_mount_args", return_value=[])
+
+    mocker.patch("airfield.cli.pkg_shell.is_arm_mac", return_value=False)
+    mocker.patch("airfield.cli.pkg_run.is_arm_mac", return_value=False)
+    mocker.patch("airfield.cli.pkg_cmd.is_arm_mac", return_value=False)
 
     mocker.patch("airfield.cli.pkg_shell.gpu_runtime_args", return_value=[])
     mocker.patch("airfield.cli.pkg_run.gpu_runtime_args", return_value=[])

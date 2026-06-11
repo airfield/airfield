@@ -1,9 +1,41 @@
 name: {{ plan_name }}
 root: .
+{% if pre_window %}
+pre_window: {{ pre_window }}
+{% endif %}
 
 windows:
-{% for pkg in packages %}
-	- {{ pkg }}:
-			panes:
-				- airfield project run {{ pkg }}
-{% endfor %}
+{%- if windows %}
+{%- for window in windows %}
+  - {{ window.name }}:
+      layout: {{ window.layout }}
+      {%- if window.pre_window %}
+      pre_window: {{ window.pre_window }}
+      {%- endif %}
+      panes:
+      {%- for pane in window.panes %}
+        {%- if pane is none %}
+        -
+        {%- elif pane is string %}
+          {%- if pane == "" %}
+        -
+          {%- else %}
+        - {{ pane }}
+          {%- endif %}
+        {%- else %}
+          {%- if pane.package %}
+        - airfield package cmd {{ pane.package }} -- {{ pane.cmd }}
+          {%- else %}
+        - {{ pane.cmd }}
+          {%- endif %}
+        {%- endif %}
+      {%- endfor %}
+{%- endfor %}
+{%- else %}
+{%- for pkg in packages %}
+  - {{ pkg }}:
+      panes:
+        - airfield project run {{ pkg }}
+{%- endfor %}
+{%- endif %}
+

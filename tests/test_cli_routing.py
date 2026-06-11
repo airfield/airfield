@@ -1,4 +1,5 @@
 import pytest
+from pathlib import Path
 from airfield.main import app
 
 @pytest.mark.parametrize(
@@ -86,7 +87,7 @@ def test_package_cmd_missing_target(cli_runner):
 def test_package_cmd_with_target(cli_runner, mock_docker, mocker):
     """Test that providing a target works correctly."""
     # We need to mock resolve_package_context and build_package_image so it doesn't fail on missing files
-    mocker.patch("airfield.cli.pkg_cmd.resolve_package_context", return_value=(None, None, [], None))
+    mocker.patch("airfield.cli.pkg_cmd.resolve_package_context", return_value=(Path("."), None, [], Path(".")))
     mocker.patch("airfield.cli.pkg_cmd.build_package_image", return_value="test_image")
     mocker.patch("airfield.cli.pkg_cmd.docker_mount_args", return_value=[])
     mocker.patch("airfield.cli.pkg_cmd.gpu_runtime_args", return_value=[])
@@ -107,15 +108,19 @@ def test_package_cmd_with_target(cli_runner, mock_docker, mocker):
 
 def test_dependency_check_defaults_to_current_directory(cli_runner, temp_workspace):
     """Test dependency check can run without an explicit target argument."""
+    from airfield.config import is_arm_mac
+    target_device = "arm64" if is_arm_mac() else "x86_64"
     result = cli_runner.invoke(app, ["package", "dependencies", "check"])
 
     assert result.exit_code == 0
-    assert f"No local dependencies found at {temp_workspace / 'dependencies' / 'x86_64'}" in result.output
+    assert f"No local dependencies found at {temp_workspace / 'dependencies' / target_device}" in result.output
 
 def test_dependency_check_accepts_positional_target(cli_runner, temp_workspace):
     """Test dependency check accepts a package/project path as a positional target."""
+    from airfield.config import is_arm_mac
+    target_device = "arm64" if is_arm_mac() else "x86_64"
     package_dir = temp_workspace / "packages" / "nav_stack"
-    dep_dir = package_dir / "dependencies" / "x86_64"
+    dep_dir = package_dir / "dependencies" / target_device
     dep_dir.mkdir(parents=True)
     (dep_dir / "local_only.yaml").write_text("name: local_only\n", encoding="utf-8")
 

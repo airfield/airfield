@@ -1,0 +1,57 @@
+#!/bin/sh
+# Git pre-push hook to validate tag versions and remind developers to tag releases.
+
+# Retrieve the current codebase version
+CODE_VERSION=$(python3 -c "import sys; sys.path.insert(0, 'src'); import airfield; print(airfield.__version__)" 2>/dev/null)
+if [ -z "$CODE_VERSION" ]; then
+    # Fallback to simple grep if python import fails
+    CODE_VERSION=$(grep "__version__" src/airfield/__init__.py | head -n 1 | cut -d'"' -f2 | cut -d"'" -f2)
+fi
+
+# Print a bright message in yellow/orange color if outputting to a terminal
+if [ -t 1 ]; then
+    YELLOW='\033[1;33m'
+    RED='\033[1;31m'
+    NC='\033[0m'
+else
+    YELLOW=''
+    RED=''
+    NC=''
+fi
+
+# Check stdin for references being pushed
+is_tag_push=0
+mismatch=0
+
+while read local_ref local_sha remote_ref remote_sha
+do
+    # Check if we are pushing a tag
+    case "$local_ref" in
+        refs/tags/*)
+            is_tag_push=1
+            tag_name=${local_ref#refs/tags/}
+            expected_tag="v$CODE_VERSION"
+            
+            if [ "$tag_name" != "$expected_tag" ]; then
+                printf "${RED}Error: You are trying to push tag '%s', but the codebase version is '%s'.${NC}\n" "$tag_name" "$CODE_VERSION"
+                printf "${RED}Please update '__version__' in 'src/airfield/__init__.py' or tag with '%s'.${NC}\n" "$expected_tag"
+                mismatch=1
+            fi
+            ;;
+    esac
+done
+
+if [ "$mismatch" -eq 1 ]; then
+    exit 1
+fi
+
+# If we are pushing a branch (not a tag), remind the developer about tagging the release
+if [ "$is_tag_push" -eq 0 ]; then
+    printf "\n%b==========================================================%b\n" "$YELLOW" "$NC"
+    printf "%bReminder: If this push contains a release, please tag it!%b\n" "$YELLOW" "$NC"
+    printf "%b  Current codebase version is v%s.%b\n" "$YELLOW" "$CODE_VERSION" "$NC"
+    printf "%b  e.g., git tag v%s && git push origin v%s%b\n" "$YELLOW" "$CODE_VERSION" "$CODE_VERSION" "$NC"
+    printf "%b==========================================================%b\n\n" "$YELLOW" "$NC"
+fi
+
+exit 0

@@ -9,6 +9,7 @@ from typing import List, Optional, Tuple
 from airfield.models import Dependency, Package
 from airfield.build_progress import run_build_with_progress, with_plain_progress
 from airfield.docker_cache import get_cache_optimization_comment
+from airfield.config import is_arm_mac
 
 
 ROS_BASE_IMAGES = {
@@ -89,6 +90,8 @@ class Builder:
         return None
 
     def _supports_cache_mounts(self) -> bool:
+        if is_arm_mac():
+            return True
         # Manual override for troubleshooting/CI:
         # AIRFIELD_FORCE_DOCKER_CACHE_MOUNTS=1 -> enable
         # AIRFIELD_DISABLE_DOCKER_CACHE_MOUNTS=1 -> disable
@@ -317,17 +320,35 @@ class Builder:
             gid = str(os.getgid())
             username = pwd.getpwuid(os.getuid()).pw_name
 
-            cmd = [
-                "docker", "build",
-                "--platform", self._resolve_docker_platform() or self.target_device,
-                "--pull",
-                "--build-arg", f"UID={uid}",
-                "--build-arg", f"GID={gid}",
-                "--build-arg", f"USERNAME={username}",
-                "-t", image_name,
-                "-f", str(df_path),
-                str(build_root),
-            ]
+            if is_arm_mac():
+                container_archs = {
+                    "arm64": "arm64",
+                    "aarch64": "arm64",
+                    "x86_64": "amd64",
+                    "amd64": "amd64",
+                }
+                cmd = [
+                    "container", "build",
+                    "--arch", container_archs.get(self.target_device.strip().lower(), "arm64"),
+                    "--build-arg", f"UID={uid}",
+                    "--build-arg", f"GID={gid}",
+                    "--build-arg", f"USERNAME={username}",
+                    "-t", image_name,
+                    "-f", str(df_path),
+                    str(build_root),
+                ]
+            else:
+                cmd = [
+                    "docker", "build",
+                    "--platform", self._resolve_docker_platform() or self.target_device,
+                    "--pull",
+                    "--build-arg", f"UID={uid}",
+                    "--build-arg", f"GID={gid}",
+                    "--build-arg", f"USERNAME={username}",
+                    "-t", image_name,
+                    "-f", str(df_path),
+                    str(build_root),
+                ]
 
             torch_build_args = [
                 ("TORCH_INSTALL_TARGET", "AIRFIELD_TORCH_INSTALL_TARGET"),

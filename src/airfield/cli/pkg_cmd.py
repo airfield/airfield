@@ -3,6 +3,7 @@ import subprocess
 from typing import List, Optional
 
 import typer
+from airfield.config import is_arm_mac
 
 from airfield.cli.package_exec import (
     build_package_image,
@@ -17,7 +18,7 @@ from airfield.cli.package_exec import (
 def run(
     package_name: Optional[str] = typer.Argument(None, help="Package name/path (or first word of command if inside a package)"),
     command: Optional[List[str]] = typer.Argument(None, help="Command to execute inside the package container"),
-    target_device: str = typer.Option("x86_64", "--target-device", help="Target architecture for dependency resolution"),
+    target_device: str = typer.Option("arm64" if is_arm_mac() else "x86_64", "--target-device", help="Target architecture for dependency resolution"),
 ):
     """Run a command directly in the package container with source mounted."""
     if in_airfield_container():
@@ -69,16 +70,26 @@ def run(
     command_text = shlex.join(command)
     print(f"Build successful. Running command in {image_name}: {command_text}")
 
-    run_cmd = [
-        "docker", "run", "--rm",
-        "--group-add", "0",
-        "--ipc=host", "--network=host",
-        *mount_args,
-        "-w", container_workdir(pkg),
-        *runtime_gpu_args,
-        image_name,
-        "/bin/bash", "-lc", command_text,
-    ]
+    if is_arm_mac():
+        run_cmd = [
+            "container", "run", "--rm",
+            *mount_args,
+            "-w", container_workdir(pkg),
+            *runtime_gpu_args,
+            image_name,
+            "/bin/bash", "-lc", command_text,
+        ]
+    else:
+        run_cmd = [
+            "docker", "run", "--rm",
+            "--group-add", "0",
+            "--ipc=host", "--network=host",
+            *mount_args,
+            "-w", container_workdir(pkg),
+            *runtime_gpu_args,
+            image_name,
+            "/bin/bash", "-lc", command_text,
+        ]
 
     result = subprocess.run(run_cmd)
     if result.returncode != 0:

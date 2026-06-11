@@ -336,3 +336,27 @@ To run the test suite in an isolated environment using your local source:
 ```bash
 pipx run --no-cache --editable --spec ".[test]" python3 -m pytest
 ```
+
+### Release Tagging and Hooks
+
+To ensure update checks work correctly, please tag releases on GitHub after pushing code:
+1. Commit and push your changes.
+2. Tag the release commit (e.g., `git tag v0.1.1`).
+3. Push the tag to GitHub (e.g., `git push origin v0.1.1`).
+
+#### Git Hook
+
+Install the repository's pre-push hook. This hook validates that any version tag being pushed matches the current version declared in the codebase (`src/airfield/__init__.py`), blocking mismatched tag pushes. If pushing a branch, it prints a tagging reminder.
+
+To configure and install the hook:
+
+```bash
+# Configure Git to use the repository's hooks folder (recommended):
+git config core.hooksPath .githooks
+
+# Alternatively, copy and activate the hook script inside your local .git directory:
+cp .githooks/pre-push .git/hooks/pre-push
+chmod +x .git/hooks/pre-push
+```
+
+The `airfield doctor` command checks if this hook is configured when run inside the repository and will report a failure if the hook is inactive or missing.

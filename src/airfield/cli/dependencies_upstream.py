@@ -3,7 +3,7 @@ from typing import List
 
 import typer
 
-from airfield.config import find_package_root, find_project_root, packages_repo_root
+from airfield.config import find_package_root, find_project_root, packages_repo_root, is_arm_mac
 
 
 def _dependency_names(dep_root: Path) -> List[str]:
@@ -41,7 +41,7 @@ def _resolve_local_dependency_root(start: Path, target_device: str) -> Path:
 
 def check(
     target: Path = typer.Argument(Path("."), help="Package or project directory to inspect (defaults to current)"),
-    target_device: str = typer.Option("x86_64", "--target-device", help="Target architecture for dependency manifests"),
+    target_device: str = typer.Option("arm64" if is_arm_mac() else "x86_64", "--target-device", help="Target architecture for dependency manifests"),
 ):
     """Check local dependency manifests against the shared packages repository."""
     local_dep_root = _resolve_local_dependency_root(target, target_device)
@@ -67,7 +67,7 @@ def check(
 
 def upstream(
     target: Path = typer.Argument(Path("."), help="Package or project directory to upstream from (defaults to current)"),
-    target_device: str = typer.Option("x86_64", "--target-device", help="Target architecture for dependency manifests"),
+    target_device: str = typer.Option("arm64" if is_arm_mac() else "x86_64", "--target-device", help="Target architecture for dependency manifests"),
 ):
     """Prepare local dependency manifests for upstreaming into the shared packages repository."""
     local_dep_root = _resolve_local_dependency_root(target, target_device)

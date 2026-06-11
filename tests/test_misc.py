@@ -9,7 +9,10 @@ def test_status_command(cli_runner, mocker):
     assert "No Airfield project or package found" in result.output
 
 def test_doctor_command(cli_runner, mocker):
+    mocker.patch("airfield.cli.doctor._check_airfield_update", return_value=("pass", "Airfield update", "up-to-date"))
+    mocker.patch("airfield.cli.doctor._check_git_hook", return_value=None)
     mocker.patch("airfield.cli.doctor._check_docker", return_value=("pass", "Docker", "ok"))
+    mocker.patch("airfield.cli.doctor._check_container", return_value=("pass", "Container", "ok"))
     mocker.patch("airfield.cli.doctor._check_shell_completion", return_value=("pass", "Shell", "ok"))
     mocker.patch("airfield.cli.doctor._check_gpu_accelerator", return_value=("pass", "GPU", "ok"))
     

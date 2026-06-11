@@ -1,7 +1,7 @@
 import re
 import yaml
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 from pydantic import BaseModel, Field
 
 
@@ -118,9 +118,23 @@ class Package(BaseModel):
 
         return cls(**data)
 
+class Pane(BaseModel):
+    package: Optional[str] = None
+    cmd: Optional[str] = None
+
+
+class Window(BaseModel):
+    name: str
+    layout: str = "main-vertical"
+    panes: List[Union[str, Pane, None]] = Field(default_factory=list)
+    pre_window: Optional[str] = None
+
+
 class Plan(BaseModel):
     name: str
     packages: List[str] = Field(default_factory=list)
+    windows: List[Window] = Field(default_factory=list)
+    pre_window: Optional[str] = None
     
     @classmethod
     def load(cls, path: Path) -> "Plan":

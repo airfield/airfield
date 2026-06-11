@@ -12,7 +12,7 @@ import typer
 import yaml
 
 from airfield.builder import Builder
-from airfield.config import AIRFIELD_CONFIG, AIRFIELD_LOCAL_CONFIG, dependencies_dir, find_project_root, packages_dir, require_package_root
+from airfield.config import AIRFIELD_CONFIG, AIRFIELD_LOCAL_CONFIG, dependencies_dir, dependency_search_paths, find_project_root, packages_dir, require_package_root, is_arm_mac
 from airfield.host_check import detect_host_facts, evaluate_host_dependencies
 from airfield.models import Dependency, Package, SUPPORTED_ROS_DISTROS
 
@@ -51,13 +51,13 @@ def resolve_package_context(
                 pkg_dir = candidate.resolve()
             else:
                 pkg_dir = (packages_dir(root) / package_name).resolve()
-        dep_root = dependencies_dir(root, target_device)
+        search_paths = dependency_search_paths(root, target_device)
     else:
         if package_name is not None:
             pkg_dir = Path(package_name).expanduser().resolve()
         else:
             pkg_dir = require_package_root()
-        dep_root = dependencies_dir(pkg_dir, target_device)
+        search_paths = dependency_search_paths(pkg_dir, target_device)
 
     pkg_yaml = pkg_dir / AIRFIELD_CONFIG
     if not pkg_yaml.exists():
@@ -73,11 +73,19 @@ def resolve_package_context(
 
     deps: List[Dependency] = []
     for dep_name in pkg.dependencies:
-        dep_path = dep_root / f"{dep_name}.yaml"
-        if dep_path.exists():
+        dep_path = None
+        for search_path in search_paths:
+            candidate = search_path / f"{dep_name}.yaml"
+            if candidate.exists():
+                dep_path = candidate
+                break
+                
+        if dep_path is not None:
             deps.append(Dependency.load(dep_path))
         else:
-            print(f"Error: Dependency '{dep_name}' manifest not found at {dep_path}")
+            print(f"Error: Dependency '{dep_name}' manifest not found in search paths:")
+            for sp in search_paths:
+                print(f"  - {sp}")
             print(f"Each dependency listed in airfield.yaml must have a corresponding .yaml manifest.")
             raise typer.Exit(1)
 
@@ -292,6 +300,8 @@ def docker_mount_args(pkg_dir: Path, pkg: Package, source_root: Path) -> List[st
 
 
 def _container_engine_alias() -> str:
+    if is_arm_mac():
+        return "container"
     docker_path = shutil.which("docker")
     if docker_path is None:
         return "docker"

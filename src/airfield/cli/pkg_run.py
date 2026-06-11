@@ -10,6 +10,8 @@ from rich.table import Table
 
 console = Console()
 
+from airfield.config import is_arm_mac
+
 from airfield.cli.package_exec import (
     build_package_image,
     container_workdir,
@@ -66,7 +68,7 @@ def _host_workdir(pkg_dir: Path, pkg) -> str:
 def run(
     package_name: Optional[str] = typer.Argument(None, help="Package name/path (or run command if inside a package)"),
     run_name: Optional[str] = typer.Argument(None, help="Run command name from package airfield.yaml", autocompletion=_run_name_autocomplete),
-    target_device: str = typer.Option("x86_64", "--target-device", help="Target architecture for dependency resolution"),
+    target_device: str = typer.Option("arm64" if is_arm_mac() else "x86_64", "--target-device", help="Target architecture for dependency resolution"),
     args: Optional[str] = typer.Option(None, "--args", "-a", help="Extra arguments appended to the configured run command"),
     execution: str = typer.Option("auto", "--execution", "-x", help="Execution mode: auto, container, or host"),
 ):
@@ -115,7 +117,8 @@ def run(
         raise typer.BadParameter("--execution must be one of: auto, container, host")
 
     if mode == "auto":
-        mode = "container" if shutil.which("docker") is not None else "host"
+        engine = "container" if is_arm_mac() else "docker"
+        mode = "container" if shutil.which(engine) is not None else "host"
         console.print(f"[dim]Execution mode auto-selected: {mode}[/dim]")
 
     if mode == "host":
@@ -134,8 +137,9 @@ def run(
                 "Use --execution host to run the command on the host instead."
             )
 
-        if shutil.which("docker") is None:
-            raise typer.BadParameter("Container execution requested but 'docker' was not found. Use --execution host.")
+        engine = "container" if is_arm_mac() else "docker"
+        if shutil.which(engine) is None:
+            raise typer.BadParameter(f"Container execution requested but '{engine}' was not found. Use --execution host.")
 
     image_name = build_package_image(pkg_dir, pkg, deps, target_device=target_device)
 
@@ -144,16 +148,26 @@ def run(
     console.print(f"Build successful. Running [bold]{run_name}[/bold] in [cyan]{image_name}[/cyan]:")
     console.print(f"  [blue]> {command_text}[/blue]")
 
-    run_cmd = [
-        "docker", "run", "--rm",
-        "--group-add", "0",
-        "--ipc=host", "--network=host",
-        *mount_args,
-        "-w", container_workdir(pkg),
-        *runtime_gpu_args,
-        image_name,
-        "/bin/bash", "-lc", command_text,
-    ]
+    if is_arm_mac():
+        run_cmd = [
+            "container", "run", "--rm",
+            *mount_args,
+            "-w", container_workdir(pkg),
+            *runtime_gpu_args,
+            image_name,
+            "/bin/bash", "-lc", command_text,
+        ]
+    else:
+        run_cmd = [
+            "docker", "run", "--rm",
+            "--group-add", "0",
+            "--ipc=host", "--network=host",
+            *mount_args,
+            "-w", container_workdir(pkg),
+            *runtime_gpu_args,
+            image_name,
+            "/bin/bash", "-lc", command_text,
+        ]
 
     result = subprocess.run(run_cmd)
     if result.returncode != 0:

@@ -3,6 +3,7 @@ from typing import Optional
 
 import typer
 from rich.console import Console
+from airfield.config import is_arm_mac
 
 from airfield.cli.package_exec import (
     build_package_image,
@@ -18,7 +19,7 @@ console = Console()
 
 def run(
     package_name: Optional[str] = typer.Argument(None, help="Package name/path (or use '.' for current package)"),
-    target_device: str = typer.Option("x86_64", "--target-device", help="Target architecture for dependency resolution"),
+    target_device: str = typer.Option("arm64" if is_arm_mac() else "x86_64", "--target-device", help="Target architecture for dependency resolution"),
 ):
     """Open an interactive shell in the package container with source mounted."""
     if in_airfield_container():
@@ -34,16 +35,26 @@ def run(
     console.print(f"Build successful. Opening shell in [cyan]{image_name}[/cyan]...")
     mount_args = docker_mount_args(pkg_dir, pkg, source_root)
     runtime_gpu_args = gpu_runtime_args()
-    run_cmd = [
-        "docker", "run", "-it", "--rm",
-        "--group-add", "0",
-        "--ipc=host", "--network=host",
-        *mount_args,
-        "-w", container_workdir(pkg),
-        *runtime_gpu_args,
-        image_name,
-        "/bin/zsh", "-l",
-    ]
+    if is_arm_mac():
+        run_cmd = [
+            "container", "run", "-it", "--rm",
+            *mount_args,
+            "-w", container_workdir(pkg),
+            *runtime_gpu_args,
+            image_name,
+            "/bin/zsh", "-l",
+        ]
+    else:
+        run_cmd = [
+            "docker", "run", "-it", "--rm",
+            "--group-add", "0",
+            "--ipc=host", "--network=host",
+            *mount_args,
+            "-w", container_workdir(pkg),
+            *runtime_gpu_args,
+            image_name,
+            "/bin/zsh", "-l",
+        ]
     result = subprocess.run(run_cmd)
     if result.returncode != 0:
         raise typer.Exit(result.returncode)
