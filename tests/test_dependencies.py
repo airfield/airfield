@@ -85,3 +85,59 @@ user: []
     dep_names = {d.name for d in deps}
     assert "shared_dep" in dep_names
     assert "specific_dep" in dep_names
+
+
+def test_resolve_package_context_finds_peer_dependency(tmp_path, mocker):
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    
+    packages_dir = project_root / "packages"
+    packages_dir.mkdir()
+    
+    mocker.patch("airfield.config.find_project_root", return_value=project_root)
+    mocker.patch("airfield.config.packages_repo_root", return_value=tmp_path / "global_packages")
+    mocker.patch("airfield.cli.package_exec.require_package_root", return_value=packages_dir / "test_pkg")
+    
+    # Create main package
+    pkg_dir = packages_dir / "test_pkg"
+    pkg_dir.mkdir()
+    
+    pkg_yaml = pkg_dir / "airfield.yaml"
+    pkg_yaml.write_text("""
+name: test_pkg
+dependencies:
+  - peer_pkg
+source_path: .
+""")
+
+    # Create peer package
+    peer_pkg_dir = packages_dir / "peer_pkg"
+    peer_pkg_dir.mkdir()
+    
+    peer_pkg_yaml = peer_pkg_dir / "airfield.yaml"
+    peer_pkg_yaml.write_text("""
+name: peer_pkg
+dependencies:
+  - shared_dep
+source_path: .
+""")
+
+    # Create dependencies in global packages
+    global_xplatform = tmp_path / "global_packages" / "xplatform"
+    global_xplatform.mkdir(parents=True)
+    
+    shared_dep_yaml = global_xplatform / "shared_dep.yaml"
+    shared_dep_yaml.write_text("""
+name: shared_dep
+version: 1.0.0
+system: []
+user: []
+""")
+
+    # Resolve context
+    _, pkg, deps, _ = resolve_package_context(package_name="test_pkg", target_device="arm64")
+    
+    assert len(deps) == 1
+    
+    dep_names = {d.name for d in deps}
+    assert "shared_dep" in dep_names

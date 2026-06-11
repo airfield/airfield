@@ -72,7 +72,15 @@ def resolve_package_context(
         raise typer.BadParameter(f"source_path '{pkg.source_path}' does not exist in {pkg_dir}")
 
     deps: List[Dependency] = []
-    for dep_name in pkg.dependencies:
+    seen_deps = set()
+    queue = list(pkg.dependencies)
+
+    while queue:
+        dep_name = queue.pop(0)
+        if dep_name in seen_deps:
+            continue
+        seen_deps.add(dep_name)
+
         dep_path = None
         for search_path in search_paths:
             candidate = search_path / f"{dep_name}.yaml"
@@ -83,11 +91,23 @@ def resolve_package_context(
         if dep_path is not None:
             deps.append(Dependency.load(dep_path))
         else:
-            print(f"Error: Dependency '{dep_name}' manifest not found in search paths:")
-            for sp in search_paths:
-                print(f"  - {sp}")
-            print(f"Each dependency listed in airfield.yaml must have a corresponding .yaml manifest.")
-            raise typer.Exit(1)
+            peer_pkg_dir = None
+            if root is not None:
+                candidate_peer = packages_dir(root) / dep_name
+                if (candidate_peer / AIRFIELD_CONFIG).exists():
+                    peer_pkg_dir = candidate_peer
+
+            if peer_pkg_dir is not None:
+                peer_pkg = Package.load(peer_pkg_dir / AIRFIELD_CONFIG)
+                queue.extend(peer_pkg.dependencies)
+            else:
+                print(f"Error: Dependency '{dep_name}' manifest not found in search paths:")
+                for sp in search_paths:
+                    print(f"  - {sp}")
+                if root is not None:
+                    print(f"  - {packages_dir(root)} (peer packages)")
+                print(f"Each dependency listed in airfield.yaml must have a corresponding .yaml manifest.")
+                raise typer.Exit(1)
 
     return pkg_dir, pkg, deps, source_root
 
