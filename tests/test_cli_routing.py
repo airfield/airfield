@@ -11,7 +11,7 @@ from airfield.main import app
         ["package", "shell"],
         ["package", "cmd"],
         ["package", "run"],
-        ["package", "up"],
+        ["project", "up"],
         ["package", "dependencies", "check"],
         ["package", "dependencies", "upstream"],
         ["project", "init"],
@@ -108,8 +108,8 @@ def test_package_cmd_with_target(cli_runner, mock_docker, mocker):
 
 def test_dependency_check_defaults_to_current_directory(cli_runner, temp_workspace):
     """Test dependency check can run without an explicit target argument."""
-    from airfield.config import is_arm_mac
-    target_device = "arm64" if is_arm_mac() else "x86_64"
+    from airfield.config import is_arm64
+    target_device = "arm64" if is_arm64() else "x86_64"
     result = cli_runner.invoke(app, ["package", "dependencies", "check"])
 
     assert result.exit_code == 0
@@ -117,8 +117,8 @@ def test_dependency_check_defaults_to_current_directory(cli_runner, temp_workspa
 
 def test_dependency_check_accepts_positional_target(cli_runner, temp_workspace):
     """Test dependency check accepts a package/project path as a positional target."""
-    from airfield.config import is_arm_mac
-    target_device = "arm64" if is_arm_mac() else "x86_64"
+    from airfield.config import is_arm64
+    target_device = "arm64" if is_arm64() else "x86_64"
     package_dir = temp_workspace / "packages" / "nav_stack"
     dep_dir = package_dir / "dependencies" / target_device
     dep_dir.mkdir(parents=True)

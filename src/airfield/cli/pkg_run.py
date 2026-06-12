@@ -10,7 +10,7 @@ from rich.table import Table
 
 console = Console()
 
-from airfield.config import is_arm_mac
+from airfield.config import is_arm_mac, is_arm64
 
 from airfield.cli.package_exec import (
     build_package_image,
@@ -68,7 +68,7 @@ def _host_workdir(pkg_dir: Path, pkg) -> str:
 def run(
     package_name: Optional[str] = typer.Argument(None, help="Package name/path (or run command if inside a package)"),
     run_name: Optional[str] = typer.Argument(None, help="Run command name from package airfield.yaml", autocompletion=_run_name_autocomplete),
-    target_device: str = typer.Option("arm64" if is_arm_mac() else "x86_64", "--target-device", help="Target architecture for dependency resolution"),
+    target_device: str = typer.Option("arm64" if is_arm64() else "x86_64", "--target-device", help="Target architecture for dependency resolution"),
     args: Optional[str] = typer.Option(None, "--args", "-a", help="Extra arguments appended to the configured run command"),
     execution: str = typer.Option("auto", "--execution", "-x", help="Execution mode: auto, container, or host"),
 ):

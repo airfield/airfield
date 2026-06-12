@@ -58,8 +58,8 @@ class Builder:
     def _resolve_base_image(self) -> str:
         if self.package.base_image:
             return self.package.base_image
-        if self.ros_distro == "jazzy" and self.target_device.strip().lower() in {"arm64", "aarch64"}:
-            return "ros:jazzy-ros-base"
+        if self.ros_distro in {"jazzy", "humble"} and self.target_device.strip().lower() in {"arm64", "aarch64"}:
+            return f"ros:{self.ros_distro}-ros-base"
         if self.ros_distro:
             return ROS_BASE_IMAGES[self.ros_distro]
         return UBUNTU_BASE_IMAGE
@@ -164,6 +164,8 @@ class Builder:
         lines.append("ARG TORCH_INSTALL_TARGET=cpu")
         lines.append("ARG TORCH_VERSION=")
         lines.append("ARG TORCH_GPU_WHL_TAG=cu121")
+        if is_arm_mac():
+            lines.append("RUN echo 'Acquire::ForceIPv4 \"true\";' > /etc/apt/apt.conf.d/99force-ipv4")
         
         # Optimized apt-get with BuildKit cache mounts
         base_packages = ["python3-pip", "python3-opencv", "git", "zsh"]

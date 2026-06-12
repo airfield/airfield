@@ -27,6 +27,11 @@ def is_arm_mac() -> bool:
     return False
 
 
+def is_arm64() -> bool:
+    return platform.machine().lower() in ("arm64", "aarch64")
+
+
+
 
 def _xdg_home(env_name: str, fallback_suffix: str) -> Path:
     value = os.environ.get(env_name)

@@ -37,7 +37,7 @@ def test_dependency_search_paths(tmp_path, mocker):
 
 
 def test_resolve_package_context_finds_xplatform_dependency(tmp_path, mocker):
-    mocker.patch("airfield.config.find_project_root", return_value=None)
+    mocker.patch("airfield.cli.package_exec.find_project_root", return_value=None)
     mocker.patch("airfield.config.packages_repo_root", return_value=tmp_path / "global_packages")
     mocker.patch("airfield.cli.package_exec.require_package_root", return_value=tmp_path / "test_pkg")
     
@@ -94,7 +94,7 @@ def test_resolve_package_context_finds_peer_dependency(tmp_path, mocker):
     packages_dir = project_root / "packages"
     packages_dir.mkdir()
     
-    mocker.patch("airfield.config.find_project_root", return_value=project_root)
+    mocker.patch("airfield.cli.package_exec.find_project_root", return_value=project_root)
     mocker.patch("airfield.config.packages_repo_root", return_value=tmp_path / "global_packages")
     mocker.patch("airfield.cli.package_exec.require_package_root", return_value=packages_dir / "test_pkg")
     

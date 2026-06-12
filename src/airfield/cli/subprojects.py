@@ -50,12 +50,26 @@ def _record_operation(project_root: Path, operation: str, affected: List[Dict[st
 
 
 def _get_subprojects(project_root: Path) -> List[Path]:
-    src_dir = project_root / "src"
     subprojects = []
+    
+    # Check src directory
+    src_dir = project_root / "src"
     if src_dir.exists() and src_dir.is_dir():
         for child in sorted(src_dir.iterdir()):
             if child.is_dir() and (child / ".git").exists():
                 subprojects.append(child)
+                
+    # Check packages directory
+    packages_dir = project_root / "packages"
+    if packages_dir.exists() and packages_dir.is_dir():
+        for child in sorted(packages_dir.iterdir()):
+            if child.is_dir() and (child / ".git").exists():
+                # Avoid duplicate names if they exist in both directories
+                if not any(sp.name == child.name for sp in subprojects):
+                    subprojects.append(child)
+                    
+    # Sort combined subprojects by name to keep order deterministic
+    subprojects.sort(key=lambda p: p.name)
     return subprojects
 
 
@@ -151,7 +165,7 @@ def cmd_status():
 
     subprojects = _get_subprojects(project_root)
     if not subprojects:
-        console.print("No subprojects found in src/")
+        console.print("No subprojects found in src/ or packages/")
         return
 
     console.print(f"[bold]Subprojects status ({len(subprojects)} total)[/bold]\n")
@@ -421,7 +435,7 @@ def _get_current_branch(cwd: Path) -> Optional[str]:
 def cmd_track(
     auto: bool = typer.Option(False, "--auto", help="Do not prompt for confirmation per subproject")
 ):
-    """Ensure all subprojects in src/ are tracked in airfield.yaml."""
+    """Ensure all subprojects in src/ or packages/ are tracked in airfield.yaml."""
     project_root = find_project_root()
     if not project_root:
         console.print("[yellow]Not in an Airfield project.[/yellow]")
@@ -477,36 +491,48 @@ def cmd_checkout():
         return
 
     src_dir = project_root / "src"
-    src_dir.mkdir(exist_ok=True)
+    packages_dir = project_root / "packages"
     
     cloned_count = 0
     for name, sp_info in subprojects_config.items():
-        sp_path = src_dir / name
-        if not sp_path.exists():
-            url = sp_info.get("url")
-            version = sp_info.get("version")
+        sp_path_src = src_dir / name
+        sp_path_packages = packages_dir / name
+        
+        if sp_path_src.exists() or sp_path_packages.exists():
+            continue
             
-            if not url:
-                console.print(f"[yellow]Subproject '{name}' is missing a URL in airfield.yaml. Skipping.[/yellow]")
-                continue
-                
-            console.print(f"Cloning {name} from {url}...")
+        if packages_dir.exists() and packages_dir.is_dir():
+            target_dir = packages_dir
+        else:
+            target_dir = src_dir
             
-            clone_cmd = ["git", "clone"]
+        target_dir.mkdir(exist_ok=True)
+        sp_path = target_dir / name
+        
+        url = sp_info.get("url")
+        version = sp_info.get("version")
+        
+        if not url:
+            console.print(f"[yellow]Subproject '{name}' is missing a URL in airfield.yaml. Skipping.[/yellow]")
+            continue
             
-            res = subprocess.run(clone_cmd + [url, str(sp_path)], capture_output=True, text=True)
-            if res.returncode == 0:
-                if version:
-                    co_res = subprocess.run(["git", "checkout", version], cwd=sp_path, capture_output=True, text=True)
-                    if co_res.returncode != 0:
-                        console.print(f"[red]Failed to checkout version '{version}' for {name}[/red]:\n{co_res.stderr}")
-                    else:
-                        console.print(f"[green]Successfully cloned {name} and checked out '{version}'[/green]")
+        console.print(f"Cloning {name} from {url}...")
+        
+        clone_cmd = ["git", "clone"]
+        
+        res = subprocess.run(clone_cmd + [url, str(sp_path)], capture_output=True, text=True)
+        if res.returncode == 0:
+            if version:
+                co_res = subprocess.run(["git", "checkout", version], cwd=sp_path, capture_output=True, text=True)
+                if co_res.returncode != 0:
+                    console.print(f"[red]Failed to checkout version '{version}' for {name}[/red]:\n{co_res.stderr}")
                 else:
-                    console.print(f"[green]Successfully cloned {name}[/green]")
-                cloned_count += 1
+                    console.print(f"[green]Successfully cloned {name} and checked out '{version}'[/green]")
             else:
-                console.print(f"[red]Failed to clone {name}[/red]:\n{res.stderr}")
+                console.print(f"[green]Successfully cloned {name}[/green]")
+            cloned_count += 1
+        else:
+            console.print(f"[red]Failed to clone {name}[/red]:\n{res.stderr}")
                 
     if cloned_count > 0:
         console.print(f"\nChecked out {cloned_count} subprojects.")

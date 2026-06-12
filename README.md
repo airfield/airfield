@@ -6,6 +6,8 @@ Airfield is a package-centric robotics framework for structuring projects, decla
 
 ## Install
 
+[Install pipx](https://pipx.pypa.io/stable/how-to/install-pipx/)
+
 Install the airfield tool from the master branch, which is stable:
 
 ```bash
