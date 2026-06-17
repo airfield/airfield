@@ -305,13 +305,11 @@ def docker_mount_args(pkg_dir: Path, pkg: Package, source_root: Path) -> List[st
             continue
 
         if not mount_path.exists():
-            raise typer.BadParameter(
-                f"Configured mount path '{mount}' does not exist (resolved to {mount_path})"
-            )
+            print(f"[WARN] Skipping mount '{mount}': path does not exist (resolved to {mount_path})")
+            continue
         if not mount_path.is_dir():
-            raise typer.BadParameter(
-                f"Configured mount path '{mount}' is not a directory (resolved to {mount_path})"
-            )
+            print(f"[WARN] Skipping mount '{mount}': not a directory (resolved to {mount_path})")
+            continue
 
         mount_args.extend(["-v", f"{mount_path}:{mount_path}"])
         seen_mounts.add(mount_str)
@@ -335,6 +333,11 @@ def _container_engine_alias() -> str:
     return "docker"
 
 
+def _is_jetson() -> bool:
+    """Detect NVIDIA Jetson platforms (Tegra-based arm64 boards)."""
+    return Path("/etc/nv_tegra_release").exists()
+
+
 def gpu_runtime_args() -> List[str]:
     install_target = (os.environ.get("AIRFIELD_TORCH_INSTALL_TARGET") or os.environ.get("TORCH_INSTALL_TARGET") or "").strip().lower()
     if install_target != "gpu":
@@ -347,7 +350,10 @@ def gpu_runtime_args() -> List[str]:
 
     engine = _container_engine_alias()
     if engine == "docker":
-        args.extend(["--gpus", "all"])
+        if _is_jetson():
+            args.extend(["--runtime", "nvidia"])
+        else:
+            args.extend(["--gpus", "all"])
     elif engine == "podman":
         for hook_dir in ("/usr/share/containers/oci/hooks.d", "/etc/containers/oci/hooks.d"):
             if Path(hook_dir).exists():

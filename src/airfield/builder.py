@@ -258,12 +258,16 @@ class Builder:
             lines.append(
                 "RUN printf '%s\\n' 'source /opt/ros/$ROS_DISTRO/setup.bash' >> /home/$USERNAME/.bashrc && "
                 "printf '%s\\n' 'if [ -f /home/$USERNAME/workspace/install/setup.bash ]; then source /home/$USERNAME/workspace/install/setup.bash; fi' >> /home/$USERNAME/.bashrc && "
-                "printf '%s\\n' 'colcon_build() { mkdir -p log && colcon build \"$@\"; }' >> /home/$USERNAME/.bashrc"
+                "printf '%s\\n' 'colcon_build() { mkdir -p log && colcon build \"$@\"; }' >> /home/$USERNAME/.bashrc && "
+                "printf '%s\\n' 'source /opt/ros/$ROS_DISTRO/setup.bash' >> /home/$USERNAME/.profile && "
+                "printf '%s\\n' 'if [ -f /home/$USERNAME/workspace/install/setup.bash ]; then source /home/$USERNAME/workspace/install/setup.bash; fi' >> /home/$USERNAME/.profile"
             )
             lines.append(
                 "RUN printf '%s\\n' 'source /opt/ros/$ROS_DISTRO/setup.zsh' >> /home/$USERNAME/.zshrc && "
                 "printf '%s\\n' 'if [ -f /home/$USERNAME/workspace/install/setup.zsh ]; then source /home/$USERNAME/workspace/install/setup.zsh; fi' >> /home/$USERNAME/.zshrc && "
-                "printf '%s\\n' 'colcon_build() { mkdir -p log && colcon build \"$@\"; }' >> /home/$USERNAME/.zshrc"
+                "printf '%s\\n' 'colcon_build() { mkdir -p log && colcon build \"$@\"; }' >> /home/$USERNAME/.zshrc && "
+                "printf '%s\\n' 'source /opt/ros/$ROS_DISTRO/setup.zsh' >> /home/$USERNAME/.zprofile && "
+                "printf '%s\\n' 'if [ -f /home/$USERNAME/workspace/install/setup.zsh ]; then source /home/$USERNAME/workspace/install/setup.zsh; fi' >> /home/$USERNAME/.zprofile"
             )
 
         lines.append("USER $USERNAME")
@@ -342,6 +346,7 @@ class Builder:
             else:
                 cmd = [
                     "docker", "build",
+                    "--network", "host",
                     "--platform", self._resolve_docker_platform() or self.target_device,
                     "--pull",
                     "--build-arg", f"UID={uid}",

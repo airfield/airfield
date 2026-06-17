@@ -13,6 +13,7 @@ def run(
     plan_name: Optional[str] = typer.Argument(None, help="Name of the plan to compile/launch"),
     output: Path = typer.Option(None, "--output", help="Path to write generated tmuxinator YAML"),
     launch: bool = typer.Option(True, "--launch/--no-launch", help="Launch tmuxinator after generation"),
+    inspect: bool = typer.Option(False, "--inspect", help="Print generated tmuxinator config to stdout without launching"),
 ):
     """Generate tmuxinator config for a plan and optionally launch it."""
     root = require_project_root()
@@ -50,6 +51,10 @@ def run(
         windows=plan.windows,
         pre_window=plan.pre_window,
     )
+
+    if inspect:
+        print(rendered)
+        raise typer.Exit(0)
 
     output_path = output or (root / ".airfield" / f"{plan.name}.tmuxinator.yml")
     output_path.parent.mkdir(parents=True, exist_ok=True)
