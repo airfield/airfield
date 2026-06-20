@@ -55,7 +55,7 @@ Common lifecycle commands:
 - `airfield subprojects undo` (undo the last subprojects operation)
 - `airfield system alias` (install `a` shorthand)
 - `airfield system install-completion` (set up shell completion)
-- `airfield system update` (check for new releases)
+- `airfield system update` (update the Airfield tool to the latest release)
 - `airfield system clean` (remove containers)
 - `airfield doctor`
 
@@ -334,7 +334,13 @@ pipx install --force --editable ".[test]"
 To run the test suite in an isolated environment using your local source:
 
 ```bash
-pipx run --no-cache --editable --spec ".[test]" python3 -m pytest
+pipx run --backend pip --no-cache --editable --spec ".[test]" python3 -m pytest --cov=src/airfield
+```
+
+Alternatively, if you are using `uv`:
+
+```bash
+uv run --no-env-file --extra test pytest --cov=src/airfield
 ```
 
 ### Release Tagging and Hooks

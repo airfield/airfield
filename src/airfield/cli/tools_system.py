@@ -204,23 +204,42 @@ def check_for_update(force: bool = False, timeout: int = 5) -> Optional[dict]:
     return result
 
 
-def update(force: bool = typer.Option(False, "--force", help="Ignore cache and force network check")):
-    """Check for newer Airfield releases and print details."""
-    res = check_for_update(force=force)
+def update(
+    force: bool = typer.Option(False, "--force", help="Force installation even if already up-to-date"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Check for updates without installing"),
+):
+    """Update Airfield to the latest version using pipx."""
+    # Force the network check to get the latest version
+    res = check_for_update(force=True)
     if res is None:
-        console.print("[yellow]Unable to determine update status.[/yellow]")
+        console.print("[yellow]Unable to determine update status from GitHub.[/yellow]")
+        if not force:
+            console.print("Use [bold]--force[/bold] to update anyway.")
+            raise typer.Exit(1)
+
+    if res is not None:
+        cur = res.get("current_version")
+        latest = res.get("latest_version")
+        url = res.get("url")
+        if res.get("newer"):
+            console.print(f"[bold yellow]Update available:[/bold yellow] {cur} → {latest}")
+            console.print(f"Release: {url}")
+        elif not force:
+            console.print(f"[green]Airfield up-to-date ({cur}).[/green]")
+            raise typer.Exit(0)
+        else:
+            console.print(f"[green]Airfield is up-to-date ({cur}), but forcing reinstall.[/green]")
+
+    if dry_run:
+        raise typer.Exit(2 if (res and res.get("newer")) else 0)
+
+    console.print("Updating Airfield via pipx...")
+    result = subprocess.run(["pipx", "install", "--force", "git+https://github.com/airfield/airfield.git"], check=False)
+    if result.returncode != 0:
+        console.print("[red]Failed to update Airfield.[/red]")
         raise typer.Exit(1)
 
-    cur = res.get("current_version")
-    latest = res.get("latest_version")
-    url = res.get("url")
-    if res.get("newer"):
-        console.print(f"[bold yellow]Update available:[/bold yellow] {cur} → {latest}")
-        console.print(f"Run: [bold]airfield system update --force[/bold] to refresh details")
-        console.print(f"Release: {url}")
-        raise typer.Exit(2)
-
-    console.print(f"[green]Airfield up-to-date ({cur}).[/green]")
+    console.print("[bold green]Airfield updated successfully.[/bold green]")
 
 
 def install_alias(

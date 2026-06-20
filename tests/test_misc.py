@@ -24,3 +24,18 @@ def test_system_clean(cli_runner, mocker):
     result = cli_runner.invoke(app, ["system", "clean"])
     assert result.exit_code == 0
     assert "Removed 5 Airfield container(s)" in result.output
+
+def test_system_update(cli_runner, mocker):
+    mocker.patch("airfield.cli.tools_system.check_for_update", return_value={
+        "current_version": "0.1.0",
+        "latest_version": "0.2.0",
+        "url": "https://github.com/airfield/airfield/releases/tag/v0.2.0",
+        "newer": True
+    })
+    subprocess_mock = mocker.patch("subprocess.run")
+    subprocess_mock.return_value.returncode = 0
+    
+    result = cli_runner.invoke(app, ["system", "update"])
+    assert result.exit_code == 0
+    assert "Updating Airfield via pipx..." in result.output
+    subprocess_mock.assert_called_once_with(["pipx", "install", "--force", "git+https://github.com/airfield/airfield.git"], check=False)

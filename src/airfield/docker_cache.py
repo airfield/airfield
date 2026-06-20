@@ -182,7 +182,7 @@ def get_cache_optimization_comment(cache_mounts_enabled: bool = True) -> str:
 
     return """\
 # Cache mounts are disabled for this build engine.
-# Reason: this engine does not support RUN --mount=type=cache in Dockerfile builds.
+# Reason: this engine does not support BuildKit cache mounts in Dockerfile builds.
 #
 # Airfield still builds correctly, but without BuildKit cache-mount acceleration.
 """
