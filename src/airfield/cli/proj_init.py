@@ -4,7 +4,7 @@ import typer
 import yaml
 from rich.console import Console
 
-from airfield.config import AIRFIELD_CONFIG
+from airfield.config import AIRFIELD_CONFIG, is_arm64
 from airfield.models import SUPPORTED_ROS_DISTROS
 from airfield.docker_cache import generate_dockerignore
 
@@ -62,7 +62,7 @@ def run(
         "name": project_root.name,
         "version": "0.1.0",
         "ros_distro": ros_distro,
-        "default_target_device": "x86_64",
+        "default_target_device": "arm64" if is_arm64() else "x86_64",
     }
     marker_path.write_text(yaml.safe_dump(marker_data, sort_keys=False), encoding="utf-8")
 

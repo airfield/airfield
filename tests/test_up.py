@@ -5,7 +5,7 @@ from airfield.models import Plan
 
 
 def test_up_legacy_plan(cli_runner, temp_workspace, mock_docker):
-    """Test 'airfield package up' with a legacy packages plan."""
+    """Test 'airfield project up' with a legacy packages plan."""
     # Initialize a dummy project
     cli_runner.invoke(app, ["project", "init", "."])
 
@@ -21,7 +21,7 @@ def test_up_legacy_plan(cli_runner, temp_workspace, mock_docker):
         encoding="utf-8"
     )
 
-    result = cli_runner.invoke(app, ["package", "up", "legacy_plan", "--no-launch"])
+    result = cli_runner.invoke(app, ["project", "up", "legacy_plan", "--no-launch"])
     assert result.exit_code == 0
     assert "Generated tmuxinator config" in result.output
 
@@ -36,7 +36,7 @@ def test_up_legacy_plan(cli_runner, temp_workspace, mock_docker):
 
 
 def test_up_new_schema_plan(cli_runner, temp_workspace, mock_docker):
-    """Test 'airfield package up' with the upgraded windows/panes schema."""
+    """Test 'airfield project up' with the upgraded windows/panes schema."""
     # Initialize a dummy project
     cli_runner.invoke(app, ["project", "init", "."])
 
@@ -60,7 +60,7 @@ def test_up_new_schema_plan(cli_runner, temp_workspace, mock_docker):
         encoding="utf-8"
     )
 
-    result = cli_runner.invoke(app, ["package", "up", "complex_plan", "--no-launch"])
+    result = cli_runner.invoke(app, ["project", "up", "complex_plan", "--no-launch"])
     assert result.exit_code == 0
     assert "Generated tmuxinator config" in result.output
 
@@ -84,7 +84,7 @@ def test_up_new_schema_plan(cli_runner, temp_workspace, mock_docker):
 
 
 def test_up_no_plan_name(cli_runner, temp_workspace):
-    """Test 'airfield package up' lists available plans when no plan name is passed."""
+    """Test 'airfield project up' lists available plans when no plan name is passed."""
     # Initialize a dummy project
     cli_runner.invoke(app, ["project", "init", "."])
 
@@ -94,8 +94,22 @@ def test_up_no_plan_name(cli_runner, temp_workspace):
     (plan_dir / "plan_a.yaml").write_text("name: plan_a\n", encoding="utf-8")
     (plan_dir / "plan_b.yaml").write_text("name: plan_b\n", encoding="utf-8")
 
-    result = cli_runner.invoke(app, ["package", "up"])
+    result = cli_runner.invoke(app, ["project", "up"])
     assert result.exit_code == 0
     assert "Available plans:" in result.output
     assert "  - plan_a" in result.output
     assert "  - plan_b" in result.output
+
+
+def test_up_inspect(cli_runner, temp_workspace):
+    """Test 'airfield project up' with --inspect option."""
+    cli_runner.invoke(app, ["project", "init", "."])
+
+    plan_dir = temp_workspace / "plans"
+    plan_dir.mkdir(exist_ok=True)
+    (plan_dir / "plan_a.yaml").write_text("name: plan_a\n", encoding="utf-8")
+
+    result = cli_runner.invoke(app, ["project", "up", "plan_a", "--inspect"])
+    assert result.exit_code == 0
+    assert "name: plan_a" in result.output
+

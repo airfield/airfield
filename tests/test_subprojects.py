@@ -21,7 +21,7 @@ def test_subprojects_status(cli_runner, temp_workspace):
     
     (sub1 / "file.txt").write_text("changed\n")
     
-    result = cli_runner.invoke(app, ["subprojects", "status"])
+    result = cli_runner.invoke(app, ["subpackages", "status"])
     assert result.exit_code == 0
     assert "sub1: dirty" in result.output
 
@@ -35,20 +35,20 @@ def test_subprojects_commit_and_undo(cli_runner, temp_workspace):
     (sub1 / "file.txt").write_text("changed\n")
     
     # Commit changes
-    result = cli_runner.invoke(app, ["subprojects", "commit", "-m", "update", "--auto"])
+    result = cli_runner.invoke(app, ["subpackages", "commit", "-m", "update", "--auto"])
     assert result.exit_code == 0
     assert "Committed in sub1" in result.output
     
-    status_result = cli_runner.invoke(app, ["subprojects", "status"])
+    status_result = cli_runner.invoke(app, ["subpackages", "status"])
     assert "sub1: up to date" in status_result.output
     
     # Undo commit
-    undo_result = cli_runner.invoke(app, ["subprojects", "undo", "--auto"])
+    undo_result = cli_runner.invoke(app, ["subpackages", "undo", "--auto"])
     assert undo_result.exit_code == 0
     assert "Undid commit in sub1" in undo_result.output
     
     # Verify it is dirty again
-    status_result2 = cli_runner.invoke(app, ["subprojects", "status"])
+    status_result2 = cli_runner.invoke(app, ["subpackages", "status"])
     assert "sub1: dirty" in status_result2.output
 
 
@@ -60,18 +60,18 @@ def test_subprojects_stash_and_undo(cli_runner, temp_workspace):
     
     (sub1 / "file.txt").write_text("changed\n")
     
-    result = cli_runner.invoke(app, ["subprojects", "stash", "--auto"])
+    result = cli_runner.invoke(app, ["subpackages", "stash", "--auto"])
     assert result.exit_code == 0
     assert "Stashed in sub1" in result.output
     
-    status_result = cli_runner.invoke(app, ["subprojects", "status"])
+    status_result = cli_runner.invoke(app, ["subpackages", "status"])
     assert "sub1: up to date" in status_result.output
     
-    undo_result = cli_runner.invoke(app, ["subprojects", "undo", "--auto"])
+    undo_result = cli_runner.invoke(app, ["subpackages", "undo", "--auto"])
     assert undo_result.exit_code == 0
     assert "Undid stash in sub1" in undo_result.output
     
-    status_result2 = cli_runner.invoke(app, ["subprojects", "status"])
+    status_result2 = cli_runner.invoke(app, ["subpackages", "status"])
     assert "sub1: dirty" in status_result2.output
 
 
@@ -93,22 +93,22 @@ def test_subprojects_push_and_undo(cli_runner, temp_workspace):
     subprocess.run(["git", "add", "file.txt"], cwd=sub1, check=True)
     subprocess.run(["git", "commit", "-m", "to push"], cwd=sub1, check=True, capture_output=True)
     
-    status_result = cli_runner.invoke(app, ["subprojects", "status"])
+    status_result = cli_runner.invoke(app, ["subpackages", "status"])
     assert "ahead 1" in status_result.output
     
-    push_result = cli_runner.invoke(app, ["subprojects", "push", "--auto"])
+    push_result = cli_runner.invoke(app, ["subpackages", "push", "--auto"])
     assert push_result.exit_code == 0
     assert "Pushed in sub1" in push_result.output
     
-    status_result2 = cli_runner.invoke(app, ["subprojects", "status"])
+    status_result2 = cli_runner.invoke(app, ["subpackages", "status"])
     assert "up to date" in status_result2.output
     
     # Undo push
-    undo_push = cli_runner.invoke(app, ["subprojects", "undo", "--auto"])
+    undo_push = cli_runner.invoke(app, ["subpackages", "undo", "--auto"])
     assert undo_push.exit_code == 0
     assert "Undid push in sub1" in undo_push.output
     
-    status_result3 = cli_runner.invoke(app, ["subprojects", "status"])
+    status_result3 = cli_runner.invoke(app, ["subpackages", "status"])
     assert "ahead 1" in status_result3.output
 
 
@@ -139,21 +139,21 @@ def test_subprojects_pull_and_undo(cli_runner, temp_workspace):
     # Fetch in sub1 so it knows it is behind
     subprocess.run(["git", "fetch"], cwd=sub1, check=True, capture_output=True)
     
-    status_result = cli_runner.invoke(app, ["subprojects", "status"])
+    status_result = cli_runner.invoke(app, ["subpackages", "status"])
     assert "behind 1" in status_result.output
     
-    pull_result = cli_runner.invoke(app, ["subprojects", "pull", "--auto"])
+    pull_result = cli_runner.invoke(app, ["subpackages", "pull", "--auto"])
     assert pull_result.exit_code == 0
     assert "Pulled in sub1" in pull_result.output
     
-    status_result2 = cli_runner.invoke(app, ["subprojects", "status"])
+    status_result2 = cli_runner.invoke(app, ["subpackages", "status"])
     assert "up to date" in status_result2.output
     
-    undo_result = cli_runner.invoke(app, ["subprojects", "undo", "--auto"])
+    undo_result = cli_runner.invoke(app, ["subpackages", "undo", "--auto"])
     assert undo_result.exit_code == 0
     assert "Undid pull in sub1" in undo_result.output
     
-    status_result3 = cli_runner.invoke(app, ["subprojects", "status"])
+    status_result3 = cli_runner.invoke(app, ["subpackages", "status"])
     assert "behind 1" in status_result3.output
 
 
@@ -171,7 +171,7 @@ def test_subprojects_track(cli_runner, temp_workspace):
     
     subprocess.run(["git", "remote", "add", "origin", str(remote_repo)], cwd=sub1, check=True)
     
-    result = cli_runner.invoke(app, ["subprojects", "track", "--auto"])
+    result = cli_runner.invoke(app, ["subpackages", "track", "--auto"])
     assert result.exit_code == 0
     assert "Tracked 1 new subprojects" in result.output
     
@@ -185,6 +185,9 @@ def test_subprojects_track(cli_runner, temp_workspace):
 
 def test_subprojects_checkout(cli_runner, temp_workspace):
     cli_runner.invoke(app, ["project", "init", "."])
+    # Delete packages folder to test fallback to src
+    import shutil
+    shutil.rmtree(temp_workspace / "packages")
     
     # Create a remote repo
     remote_repo = temp_workspace / "remote"
@@ -209,7 +212,7 @@ def test_subprojects_checkout(cli_runner, temp_workspace):
             }
         }, f)
         
-    result = cli_runner.invoke(app, ["subprojects", "checkout"])
+    result = cli_runner.invoke(app, ["subpackages", "checkout"])
     assert result.exit_code == 0
     assert "Successfully cloned sub1" in result.output
     
@@ -225,14 +228,14 @@ def test_subprojects_diff(cli_runner, temp_workspace):
     setup_git_repo(sub1)
     
     # No dirty subprojects
-    result = cli_runner.invoke(app, ["subprojects", "diff"])
+    result = cli_runner.invoke(app, ["subpackages", "diff"])
     assert result.exit_code == 0
     assert "No dirty subprojects found." in result.output
     
     # Make it dirty
     (sub1 / "file.txt").write_text("changed\n")
     
-    result = cli_runner.invoke(app, ["subprojects", "diff"])
+    result = cli_runner.invoke(app, ["subpackages", "diff"])
     assert result.exit_code == 0
     assert "=== sub1 ===" in result.output
     assert "changed" in result.output
@@ -242,7 +245,7 @@ def test_subprojects_diff(cli_runner, temp_workspace):
     subprocess.run(["git", "add", "file.txt"], cwd=sub1, check=True)
     
     # diff --staged
-    result = cli_runner.invoke(app, ["subprojects", "diff", "--staged"])
+    result = cli_runner.invoke(app, ["subpackages", "diff", "--staged"])
     assert result.exit_code == 0
     assert "=== sub1 ===" in result.output
     assert "changed" in result.output
@@ -258,13 +261,13 @@ def test_subprojects_clean_and_undo(cli_runner, temp_workspace):
     (sub1 / "file.txt").write_text("changed\n")
     (sub1 / "untracked.txt").write_text("untracked\n")
     
-    result = cli_runner.invoke(app, ["subprojects", "clean", "--force"])
+    result = cli_runner.invoke(app, ["subpackages", "clean", "--force"])
     assert result.exit_code == 0
     # because of --force, it should only log and have no output printed to console
     # Wait, the output for --force should be empty or at least no confirmation prompts.
     # Actually wait, let's verify if the file is clean.
     
-    status_result = cli_runner.invoke(app, ["subprojects", "status"])
+    status_result = cli_runner.invoke(app, ["subpackages", "status"])
     assert "sub1: up to date" in status_result.output
     
     # Check untracked is gone
@@ -272,12 +275,68 @@ def test_subprojects_clean_and_undo(cli_runner, temp_workspace):
     assert (sub1 / "file.txt").read_text() == "initial\n"
     
     # Undo clean
-    undo_result = cli_runner.invoke(app, ["subprojects", "undo", "--auto"])
+    undo_result = cli_runner.invoke(app, ["subpackages", "undo", "--auto"])
     assert undo_result.exit_code == 0
     assert "Undid clean in sub1" in undo_result.output
     
     # Wait, undo clean (stash pop) should restore the changed file and untracked file
-    status_result2 = cli_runner.invoke(app, ["subprojects", "status"])
+    status_result2 = cli_runner.invoke(app, ["subpackages", "status"])
     assert "sub1: dirty" in status_result2.output
     assert (sub1 / "untracked.txt").exists()
     assert (sub1 / "file.txt").read_text() == "changed\n"
+
+
+def test_subprojects_in_packages_folder(cli_runner, temp_workspace):
+    cli_runner.invoke(app, ["project", "init", "."])
+    sub1 = temp_workspace / "packages" / "sub_in_proj"
+    sub1.mkdir(parents=True)
+    setup_git_repo(sub1)
+    
+    (sub1 / "file.txt").write_text("changed\n")
+    
+    # Test subpackages command alias as well
+    result = cli_runner.invoke(app, ["subpackages", "status"])
+    assert result.exit_code == 0
+    assert "sub_in_proj: dirty" in result.output
+
+
+def test_subprojects_checkout_to_packages(cli_runner, temp_workspace):
+    cli_runner.invoke(app, ["project", "init", "."])
+    
+    # Create a remote repo
+    remote_repo = temp_workspace / "remote"
+    remote_repo.mkdir()
+    subprocess.run(["git", "init", "--bare"], cwd=remote_repo, check=True, capture_output=True)
+    
+    # Set up dummy repo content so we can clone it
+    dummy = temp_workspace / "dummy"
+    dummy.mkdir()
+    setup_git_repo(dummy)
+    subprocess.run(["git", "remote", "add", "origin", str(remote_repo)], cwd=dummy, check=True)
+    subprocess.run(["git", "push", "-u", "origin", "master"], cwd=dummy, check=True, capture_output=True)
+    
+    # Pre-create the packages directory to signal we want to clone there (project init does it, but we ensure it here)
+    (temp_workspace / "packages").mkdir(exist_ok=True)
+    
+    # Write to airfield.yaml
+    with open(temp_workspace / "airfield.yaml", "w") as f:
+        yaml.dump({
+            "kind": "project",
+            "subprojects": {
+                "sub1": {
+                    "url": str(remote_repo)
+                }
+            }
+        }, f)
+        
+    result = cli_runner.invoke(app, ["subpackages", "checkout"])
+    assert result.exit_code == 0
+    assert "Successfully cloned sub1" in result.output
+    
+    # Verify it was cloned to packages/sub1
+    sub1_path = temp_workspace / "packages" / "sub1"
+    assert sub1_path.exists()
+    assert (sub1_path / ".git").exists()
+    
+    # Verify src/sub1 does not exist
+    assert not (temp_workspace / "src" / "sub1").exists()

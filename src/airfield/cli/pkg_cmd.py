@@ -3,7 +3,7 @@ import subprocess
 from typing import List, Optional
 
 import typer
-from airfield.config import is_arm_mac
+from airfield.config import is_arm_mac, is_arm64
 
 from airfield.cli.package_exec import (
     build_package_image,
@@ -18,7 +18,7 @@ from airfield.cli.package_exec import (
 def run(
     package_name: Optional[str] = typer.Argument(None, help="Package name/path (or first word of command if inside a package)"),
     command: Optional[List[str]] = typer.Argument(None, help="Command to execute inside the package container"),
-    target_device: str = typer.Option("arm64" if is_arm_mac() else "x86_64", "--target-device", help="Target architecture for dependency resolution"),
+    target_device: str = typer.Option("arm64" if is_arm64() else "x86_64", "--target-device", help="Target architecture for dependency resolution"),
 ):
     """Run a command directly in the package container with source mounted."""
     if in_airfield_container():

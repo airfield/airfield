@@ -13,6 +13,7 @@ from airfield.config import (
     find_project_root,
     plans_dir,
     is_arm_mac,
+    is_arm64,
 )
 
 console = Console()
@@ -204,7 +205,7 @@ def run(
 
     resolved_target = target_device
     if resolved_target is None:
-        resolved_target = "x86_64"
+        resolved_target = "arm64" if is_arm64() else "x86_64"
         if project_root is not None:
             project_manifest = _project_manifest_path(project_root)
             if project_manifest is not None:
