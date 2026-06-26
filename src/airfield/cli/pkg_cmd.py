@@ -68,6 +68,9 @@ def run(
     mount_args = docker_mount_args(pkg_dir, pkg, source_root)
     runtime_gpu_args = gpu_runtime_args()
     command_text = shlex.join(command)
+    if pkg is not None and pkg.ros_distro and command and not command[0].startswith("colcon"):
+        ros_prefix = f"source /opt/ros/{pkg.ros_distro}/setup.bash && (if [ ! -f install/setup.bash ]; then colcon build --symlink-install >/dev/null 2>&1; fi) && if [ -f install/setup.bash ]; then source install/setup.bash; fi"
+        command_text = f"{ros_prefix} && {command_text}"
     print(f"Build successful. Running command in {image_name}: {command_text}")
 
     if is_arm_mac():

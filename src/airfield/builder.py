@@ -164,7 +164,8 @@ class Builder:
         lines.append("ARG TORCH_INSTALL_TARGET=cpu")
         lines.append("ARG TORCH_VERSION=")
         lines.append("ARG TORCH_GPU_WHL_TAG=cu121")
-        lines.append("RUN echo 'Acquire::ForceIPv4 \"true\";' > /etc/apt/apt.conf.d/99force-ipv4")
+        if is_arm_mac():
+            lines.append("RUN echo 'Acquire::ForceIPv4 \"true\";' > /etc/apt/apt.conf.d/99force-ipv4")
 
 
         
@@ -344,6 +345,7 @@ class Builder:
                 cmd = [
                     "docker", "build",
                     "--platform", self._resolve_docker_platform() or self.target_device,
+                    "--network=host",
                     "--pull",
                     "--build-arg", f"UID={uid}",
                     "--build-arg", f"GID={gid}",

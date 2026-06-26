@@ -3,8 +3,9 @@ from pathlib import Path
 from airfield.models import Package, Dependency
 from airfield.builder import Builder
 
-def test_builder_generate_dockerfile_includes_force_ipv4():
+def test_builder_generate_dockerfile_includes_force_ipv4(mocker):
     # Arrange
+    mocker.patch("airfield.builder.is_arm_mac", return_value=True)
     package = Package(name="test_pkg")
     dependencies = []
     builder = Builder(package=package, dependencies=dependencies, target_device="x86_64")
@@ -14,6 +15,7 @@ def test_builder_generate_dockerfile_includes_force_ipv4():
 
     # Assert
     assert "RUN echo 'Acquire::ForceIPv4 \"true\";' > /etc/apt/apt.conf.d/99force-ipv4" in dockerfile
+
 
 def test_builder_generate_dockerfile_cache_mounts_enabled():
     package = Package(name="test_pkg")

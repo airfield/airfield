@@ -47,7 +47,7 @@ def resolve_package_context(
             pkg_dir = require_package_root()
         else:
             candidate = Path(package_name).expanduser()
-            if candidate.exists():
+            if candidate.exists() and (candidate / AIRFIELD_CONFIG).exists():
                 pkg_dir = candidate.resolve()
             else:
                 pkg_dir = (packages_dir(root) / package_name).resolve()
@@ -289,10 +289,28 @@ def docker_mount_args(pkg_dir: Path, pkg: Package, source_root: Path) -> List[st
     """Build docker -v mount arguments from package source and config mounts."""
     mount_args: List[str] = []
 
-    container_src = container_source_mount_path(pkg.name)
-    mount_args.extend(["-v", f"{source_root}:{container_src}"])
-
     seen_mounts = {str(source_root)}
+    if pkg.ros_distro:
+        project_root = find_project_root(pkg_dir)
+        username = pwd.getpwuid(os.getuid()).pw_name
+        container_ws = f"/home/{username}/workspace"
+        if project_root and (project_root / "packages").exists():
+            pkg_root = (project_root / "packages").resolve()
+            mount_args.extend(["-v", f"{pkg_root}:{container_ws}/src"])
+            seen_mounts.add(str(pkg_root))
+            cache_base = project_root / ".airfield" / "ros_ws"
+        else:
+            container_src = container_source_mount_path(pkg.name)
+            mount_args.extend(["-v", f"{source_root}:{container_src}"])
+            cache_base = pkg_dir / ".airfield" / "ros_ws"
+
+        for subdir in ["build", "install", "log"]:
+            local_sub = cache_base / subdir
+            local_sub.mkdir(parents=True, exist_ok=True)
+            mount_args.extend(["-v", f"{local_sub}:{container_ws}/{subdir}"])
+    else:
+        container_src = container_source_mount_path(pkg.name)
+        mount_args.extend(["-v", f"{source_root}:{container_src}"])
     for mount in _configured_mounts(pkg_dir):
         mount_path = Path(mount).expanduser()
         if not mount_path.is_absolute():
@@ -307,10 +325,6 @@ def docker_mount_args(pkg_dir: Path, pkg: Package, source_root: Path) -> List[st
         if not mount_path.exists():
             raise typer.BadParameter(
                 f"Configured mount path '{mount}' does not exist (resolved to {mount_path})"
-            )
-        if not mount_path.is_dir():
-            raise typer.BadParameter(
-                f"Configured mount path '{mount}' is not a directory (resolved to {mount_path})"
             )
 
         mount_args.extend(["-v", f"{mount_path}:{mount_path}"])
