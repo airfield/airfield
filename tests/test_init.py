@@ -17,6 +17,7 @@ def test_project_init(cli_runner, temp_workspace):
     assert (project_dir / "plans" / "example.yaml").exists()
     assert (project_dir / ".dockerignore").exists()
     assert (project_dir / ".gitignore").exists()
+    assert "packages/" in (project_dir / ".gitignore").read_text()
 
 def test_package_init_standalone(cli_runner, temp_workspace):
     """Test initializing a standalone package."""

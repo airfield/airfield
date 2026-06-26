@@ -92,6 +92,7 @@ def run(
     _ensure_gitignore_entry(project_root, "build/")
     _ensure_gitignore_entry(project_root, "log/")
     _ensure_gitignore_entry(project_root, "install/")
+    _ensure_gitignore_entry(project_root, "packages/")
 
     # Generate .dockerignore for optimized container builds
     generate_dockerignore(project_root)

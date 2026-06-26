@@ -173,7 +173,7 @@ def test_subprojects_track(cli_runner, temp_workspace):
     
     result = cli_runner.invoke(app, ["subpackages", "track", "--auto"])
     assert result.exit_code == 0
-    assert "Tracked 1 new subprojects" in result.output
+    assert "Tracked 1 new Subpackages" in result.output
     
     # Verify yaml
     with open(temp_workspace / "airfield.yaml") as f:
@@ -230,7 +230,7 @@ def test_subprojects_diff(cli_runner, temp_workspace):
     # No dirty subprojects
     result = cli_runner.invoke(app, ["subpackages", "diff"])
     assert result.exit_code == 0
-    assert "No dirty subprojects found." in result.output
+    assert "No dirty Subpackages found." in result.output
     
     # Make it dirty
     (sub1 / "file.txt").write_text("changed\n")
@@ -340,3 +340,53 @@ def test_subprojects_checkout_to_packages(cli_runner, temp_workspace):
     
     # Verify src/sub1 does not exist
     assert not (temp_workspace / "src" / "sub1").exists()
+
+
+def test_subpackages_switch_and_undo(cli_runner, temp_workspace):
+    # Setup parent project git repo
+    setup_git_repo(temp_workspace)
+    subprocess.run(["git", "branch", "feature-main"], cwd=temp_workspace, check=True)
+    subprocess.run(["git", "checkout", "feature-main"], cwd=temp_workspace, check=True)
+
+    cli_runner.invoke(app, ["project", "init", "."])
+
+    # Setup subpackage repo
+    sub1 = temp_workspace / "src" / "sub1"
+    sub1.mkdir(parents=True)
+    setup_git_repo(sub1)
+    subprocess.run(["git", "branch", "feature-main"], cwd=sub1, check=True)
+    subprocess.run(["git", "branch", "explicit-branch"], cwd=sub1, check=True)
+
+    # 1. Test switch without args (should prompt for confirmation unless --auto)
+    # Cancel confirmation
+    cancel_res = cli_runner.invoke(app, ["subpackages", "switch"], input="n\n")
+    assert cancel_res.exit_code == 0
+    assert "Skipped switching branches" in cancel_res.output
+
+    # Confirm confirmation
+    switch_res = cli_runner.invoke(app, ["subpackage", "switch"], input="y\n")
+    assert switch_res.exit_code == 0
+    assert "Switched Subpackage 'sub1' to branch 'feature-main'" in switch_res.output
+
+    # Verify branch switched
+    res = subprocess.run(["git", "branch", "--show-current"], cwd=sub1, capture_output=True, text=True)
+    assert res.stdout.strip() == "feature-main"
+
+    # 2. Undo switch
+    undo_res = cli_runner.invoke(app, ["subpackages", "undo", "--auto"])
+    assert undo_res.exit_code == 0
+    assert "Undid switch in sub1" in undo_res.output
+    res_undo = subprocess.run(["git", "branch", "--show-current"], cwd=sub1, capture_output=True, text=True)
+    assert res_undo.stdout.strip() in ["master", "main"]
+
+    # 3. Test switch with explicit arg (no prompt needed)
+    explicit_res = cli_runner.invoke(app, ["subpackage", "switch", "explicit-branch"])
+    assert explicit_res.exit_code == 0
+    assert "Switched Subpackage 'sub1' to branch 'explicit-branch'" in explicit_res.output
+    res_exp = subprocess.run(["git", "branch", "--show-current"], cwd=sub1, capture_output=True, text=True)
+    assert res_exp.stdout.strip() == "explicit-branch"
+
+    # 4. Test switch warning when branch not possible
+    bad_res = cli_runner.invoke(app, ["subpackages", "switch", "nonexistent-branch"])
+    assert "Warning: Could not switch Subpackage 'sub1' to branch 'nonexistent-branch'" in bad_res.output
+

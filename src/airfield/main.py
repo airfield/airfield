@@ -53,6 +53,7 @@ tools_app.add_typer(tools_system_app, name="system")
 app.add_typer(tools_system_app, name="system")
 app.add_typer(docker_app, name="docker")
 app.add_typer(subprojects.app, name="subpackages")
+app.add_typer(subprojects.app, name="subpackage")
 
 pkg_app.command(name="init")(pkg_init.run)
 pkg_app.command(name="deinit")(pkg_deinit.run)
