@@ -12,7 +12,7 @@ import typer
 import yaml
 
 from airfield.builder import Builder
-from airfield.config import AIRFIELD_CONFIG, AIRFIELD_LOCAL_CONFIG, dependencies_dir, dependency_search_paths, find_project_root, packages_dir, require_package_root, is_arm_mac
+from airfield.config import AIRFIELD_CONFIG, AIRFIELD_LOCAL_CONFIG, _load_yaml, dependencies_dir, dependency_search_paths, find_project_root, packages_dir, require_package_root, is_arm_mac
 from airfield.host_check import detect_host_facts, evaluate_host_dependencies
 from airfield.models import Dependency, Package, SUPPORTED_ROS_DISTROS
 
@@ -61,9 +61,22 @@ def resolve_package_context(
 
     pkg_yaml = pkg_dir / AIRFIELD_CONFIG
     if not pkg_yaml.exists():
-        raise typer.BadParameter(
-            f"Package config not found at {pkg_dir / AIRFIELD_CONFIG}"
-        )
+        found_repo_pkg = None
+        if package_name is not None:
+            for sp in search_paths:
+                cand = sp / f"{package_name}.yaml"
+                if cand.exists():
+                    data = _load_yaml(cand)
+                    if isinstance(data, dict) and (data.get("kind") == "package" or "source_path" in data):
+                        found_repo_pkg = cand
+                        break
+        if found_repo_pkg is not None:
+            pkg_yaml = found_repo_pkg
+            pkg_dir = found_repo_pkg.parent
+        else:
+            raise typer.BadParameter(
+                f"Package config not found at {pkg_dir / AIRFIELD_CONFIG}"
+            )
 
     pkg = Package.load(pkg_yaml)
     _resolve_package_ros_distro(pkg, root)
@@ -89,7 +102,12 @@ def resolve_package_context(
                 break
                 
         if dep_path is not None:
-            deps.append(Dependency.load(dep_path))
+            data = _load_yaml(dep_path)
+            if isinstance(data, dict) and (data.get("kind") == "package" or "source_path" in data):
+                peer_pkg = Package.load(dep_path)
+                queue.extend(peer_pkg.dependencies)
+            else:
+                deps.append(Dependency.load(dep_path))
         else:
             peer_pkg_dir = None
             if root is not None:

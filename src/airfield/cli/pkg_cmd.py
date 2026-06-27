@@ -44,12 +44,17 @@ def run(
             if candidate.exists() and (candidate / AIRFIELD_CONFIG).exists():
                 is_valid_package = True
             else:
-                from airfield.config import find_project_root, packages_dir
+                from airfield.config import find_project_root, packages_dir, dependency_search_paths
                 root = find_project_root()
                 if root:
                     pkg_dir_candidate = packages_dir(root) / package_name
                     if pkg_dir_candidate.exists():
                         is_valid_package = True
+                    else:
+                        for sp in dependency_search_paths(root, target_device):
+                            if (sp / f"{package_name}.yaml").exists():
+                                is_valid_package = True
+                                break
 
             if not is_valid_package:
                 actual_package_name = None
