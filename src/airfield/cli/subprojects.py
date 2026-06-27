@@ -1,7 +1,7 @@
 import json
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 import time
 
 import typer
@@ -139,6 +139,25 @@ def _confirm(msg: str, auto: bool, diff_callback=None) -> bool:
                 console.print("Please answer y, n, or d.")
     else:
         return typer.confirm(msg, default=False)
+
+
+def _confirm_all(msg: str, auto: bool) -> Tuple[bool, bool]:
+    """Prompt for confirmation with a 'yes to all' option. Returns (confirmed, new_auto_state)."""
+    if auto:
+        return True, True
+    
+    prompt_msg = f"{msg} [y/N/a]"
+    while True:
+        response = typer.prompt(prompt_msg, default="N", show_default=False).lower().strip()
+        if response in ["y", "yes"]:
+            return True, False
+        elif response in ["n", "no", ""]:
+            return False, False
+        elif response in ["a", "all", "ya", "yes to all"]:
+            return True, True
+        else:
+            console.print("Please answer y (yes), n (no), or a (yes to all).")
+
 
 
 def _echo_via_more(text: str):
@@ -699,7 +718,8 @@ def cmd_switch(
         if not target_branch:
             console.print("[red]Could not determine current branch of parent project.[/red]")
             raise typer.Exit(1)
-        if not _confirm(f"Switch all Subpackages to branch '{target_branch}'?", auto):
+        confirmed, auto = _confirm_all(f"Switch all Subpackages to branch '{target_branch}'?", auto)
+        if not confirmed:
             console.print("Skipped switching branches.")
             return
     else:
@@ -724,10 +744,73 @@ def cmd_switch(
                 "switched_to": target_branch
             })
         else:
-            console.print(f"[yellow]Warning: Could not switch Subpackage '{sp.name}' to branch '{target_branch}': {res.stderr.strip()}[/yellow]")
+            check_res = _run_git(["rev-parse", "--verify", target_branch], sp)
+            if check_res.returncode != 0:
+                confirmed, auto = _confirm_all(f"Branch '{target_branch}' does not exist in Subpackage '{sp.name}'. Create and switch to new branch?", auto)
+                if confirmed:
+                    create_res = _run_git(["checkout", "-b", target_branch], sp)
+                    if create_res.returncode == 0:
+                        console.print(f"[green]Created and switched Subpackage '{sp.name}' to new branch '{target_branch}'[/green]")
+                        affected.append({
+                            "path": str(sp.relative_to(project_root)),
+                            "old_branch": old_branch,
+                            "old_head": old_head,
+                            "switched_to": target_branch
+                        })
+                    else:
+                        console.print(f"[yellow]Warning: Could not create branch '{target_branch}' in Subpackage '{sp.name}': {create_res.stderr.strip()}[/yellow]")
+                else:
+                    console.print(f"[yellow]Skipped creating branch '{target_branch}' in Subpackage '{sp.name}'.[/yellow]")
+            else:
+                console.print(f"[yellow]Warning: Could not switch Subpackage '{sp.name}' to branch '{target_branch}': {res.stderr.strip()}[/yellow]")
 
     _record_operation(project_root, "switch", affected)
     console.print(f"\nSwitched branches in {len(affected)} Subpackages.")
+
+
+@app.command(name="find")
+def cmd_find(
+    name: str = typer.Argument(..., help="Name of the Subpackage to find")
+):
+    """Print the absolute path to a Subpackage."""
+    project_root = find_project_root()
+    if not project_root:
+        console.print("[yellow]Not in an Airfield project.[/yellow]")
+        raise typer.Exit(1)
+
+    subprojects = _get_subprojects(project_root)
+    for sp in subprojects:
+        if sp.name == name:
+            typer.echo(str(sp.resolve()))
+            return
+
+    console.print(f"[red]Subpackage '{name}' not found.[/red]")
+    raise typer.Exit(1)
+
+
+@app.command(name="cd")
+def cmd_cd(
+    name: str = typer.Argument(..., help="Name of the Subpackage to cd into")
+):
+    """Change directory to a Subpackage (starts a new shell)."""
+    import os
+    project_root = find_project_root()
+    if not project_root:
+        console.print("[yellow]Not in an Airfield project.[/yellow]")
+        raise typer.Exit(1)
+
+    subprojects = _get_subprojects(project_root)
+    for sp in subprojects:
+        if sp.name == name:
+            target_dir = sp.resolve()
+            console.print(f"[green]Changing directory to Subpackage '{name}' ({target_dir})[/green]")
+            os.chdir(target_dir)
+            shell = os.environ.get("SHELL", "/bin/bash")
+            os.execvp(shell, [shell])
+            return
+
+    console.print(f"[red]Subpackage '{name}' not found.[/red]")
+    raise typer.Exit(1)
 
 
 @app.callback(invoke_without_command=True)
@@ -735,3 +818,4 @@ def subprojects_main(ctx: typer.Context):
     if ctx.invoked_subcommand is None:
         console.print(ctx.get_help())
         raise typer.Exit()
+

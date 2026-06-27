@@ -386,7 +386,48 @@ def test_subpackages_switch_and_undo(cli_runner, temp_workspace):
     res_exp = subprocess.run(["git", "branch", "--show-current"], cwd=sub1, capture_output=True, text=True)
     assert res_exp.stdout.strip() == "explicit-branch"
 
-    # 4. Test switch warning when branch not possible
-    bad_res = cli_runner.invoke(app, ["subpackages", "switch", "nonexistent-branch"])
-    assert "Warning: Could not switch Subpackage 'sub1' to branch 'nonexistent-branch'" in bad_res.output
+    # 4. Test switch when branch not found (prompt to create)
+    # Skip creation
+    skip_res = cli_runner.invoke(app, ["subpackages", "switch", "new-missing-branch"], input="n\n")
+    assert "Skipped creating branch 'new-missing-branch' in Subpackage 'sub1'" in skip_res.output
+
+    # Confirm creation
+    create_res = cli_runner.invoke(app, ["subpackages", "switch", "new-missing-branch"], input="y\n")
+    assert "Created and switched Subpackage 'sub1' to new branch 'new-missing-branch'" in create_res.output
+    res_new = subprocess.run(["git", "branch", "--show-current"], cwd=sub1, capture_output=True, text=True)
+    assert res_new.stdout.strip() == "new-missing-branch"
+
+    # 5. Test switch with 'a' (yes to all)
+    sub2 = temp_workspace / "src" / "sub2"
+    sub2.mkdir(parents=True)
+    setup_git_repo(sub2)
+    all_res = cli_runner.invoke(app, ["subpackages", "switch", "all-missing-branch"], input="a\n")
+    assert "Created and switched Subpackage 'sub1' to new branch 'all-missing-branch'" in all_res.output
+    assert "Created and switched Subpackage 'sub2' to new branch 'all-missing-branch'" in all_res.output
+
+
+def test_subpackages_find_and_cd(cli_runner, temp_workspace, mocker):
+    setup_git_repo(temp_workspace)
+    cli_runner.invoke(app, ["project", "init", "."])
+
+    sub1 = temp_workspace / "src" / "sub1"
+    sub1.mkdir(parents=True)
+    setup_git_repo(sub1)
+
+    # 1. Test find
+    find_res = cli_runner.invoke(app, ["subpackages", "find", "sub1"])
+    assert find_res.exit_code == 0
+    assert str(sub1.resolve()) in find_res.output
+
+    find_bad = cli_runner.invoke(app, ["subpackages", "find", "nonexistent"])
+    assert find_bad.exit_code == 1
+
+    # 2. Test cd
+    mock_chdir = mocker.patch("os.chdir")
+    mock_execvp = mocker.patch("os.execvp")
+    cd_res = cli_runner.invoke(app, ["subpackages", "cd", "sub1"])
+    assert cd_res.exit_code == 0
+    mock_chdir.assert_called_once_with(sub1.resolve())
+    mock_execvp.assert_called_once()
+
 
