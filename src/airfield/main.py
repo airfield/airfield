@@ -66,6 +66,10 @@ deps_app = typer.Typer(help="Dependency repository operations", cls=PrefixGroup,
 pkg_app.add_typer(deps_app, name="dependencies")
 deps_app.command(name="check")(dependencies_upstream.check)
 deps_app.command(name="upstream")(dependencies_upstream.upstream)
+deps_app.command(name="pull")(dependencies_upstream.pull)
+deps_app.command(name="update")(dependencies_upstream.pull)
+pkg_app.command(name="pull")(dependencies_upstream.pull)
+pkg_app.command(name="update")(dependencies_upstream.pull)
 
 proj_app.command(name="init")(proj_init.run)
 proj_app.command(name="deinit")(proj_deinit.run)

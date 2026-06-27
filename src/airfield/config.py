@@ -103,6 +103,29 @@ def packages_repo_root() -> Path:
     return _cached_packages_root()
 
 
+def pull_packages_repo() -> Path:
+    """Check the remote GitHub repository and pull package updates."""
+    repo = packages_repo_root()
+    if (repo / ".git").exists():
+        result = subprocess.run(
+            ["git", "-C", str(repo), "pull"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            result = subprocess.run(
+                ["git", "-C", str(repo), "pull", PACKAGES_GITHUB_REPO],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                details = (result.stderr or result.stdout or "unknown error").strip()
+                raise RuntimeError(f"Failed to pull remote packages from {PACKAGES_GITHUB_REPO}: {details}")
+    return repo
+
+
 def _load_yaml(path: Path):
     try:
         with open(path, "r", encoding="utf-8") as f:

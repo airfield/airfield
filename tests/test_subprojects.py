@@ -112,6 +112,35 @@ def test_subprojects_push_and_undo(cli_runner, temp_workspace):
     assert "ahead 1" in status_result3.output
 
 
+def test_subprojects_push_no_upstream(cli_runner, temp_workspace):
+    cli_runner.invoke(app, ["project", "init", "."])
+    remote_repo = temp_workspace / "remote"
+    remote_repo.mkdir()
+    subprocess.run(["git", "init", "--bare"], cwd=remote_repo, check=True, capture_output=True)
+    
+    sub1 = temp_workspace / "src" / "sub1"
+    sub1.mkdir(parents=True)
+    setup_git_repo(sub1)
+    
+    subprocess.run(["git", "remote", "add", "origin", str(remote_repo)], cwd=sub1, check=True)
+    subprocess.run(["git", "checkout", "-b", "airfield"], cwd=sub1, check=True, capture_output=True)
+    
+    push_result = cli_runner.invoke(app, ["subpackages", "push", "--auto"])
+    assert push_result.exit_code == 0
+    assert "Pushed in sub1" in push_result.output
+    
+    res = subprocess.run(["git", "rev-parse", "--abbrev-ref", "@{u}"], cwd=sub1, capture_output=True, text=True)
+    assert res.returncode == 0
+    assert "origin/airfield" in res.stdout
+    
+    undo_push = cli_runner.invoke(app, ["subpackages", "undo", "--auto"])
+    assert undo_push.exit_code == 0
+    assert "Undid push in sub1" in undo_push.output
+    
+    res2 = subprocess.run(["git", "rev-parse", "--abbrev-ref", "@{u}"], cwd=sub1, capture_output=True, text=True)
+    assert res2.returncode != 0
+
+
 def test_subprojects_pull_and_undo(cli_runner, temp_workspace):
     cli_runner.invoke(app, ["project", "init", "."])
     remote_repo = temp_workspace / "remote"

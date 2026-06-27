@@ -274,22 +274,48 @@ def cmd_push(
     affected = []
 
     for sp in subprojects:
-        ahead, _ = _ahead_behind(sp)
-        if ahead > 0:
-            upstream = _get_upstream(sp)
-            if not upstream:
-                console.print(f"[yellow]Skipping {sp.name}: No upstream branch found[/yellow]")
+        upstream = _get_upstream(sp)
+        if upstream:
+            ahead, _ = _ahead_behind(sp)
+            if ahead > 0:
+                if _confirm(f"Push {ahead} commit(s) in {sp.name}?", auto):
+                    remote_head_before = _get_remote_head(sp, upstream)
+                    res = _run_git(["push"], sp)
+                    if res.returncode == 0:
+                        console.print(f"[green]Pushed in {sp.name}[/green]")
+                        affected.append({
+                            "path": str(sp.relative_to(project_root)),
+                            "upstream": upstream,
+                            "old_remote_head": remote_head_before,
+                            "had_upstream": True
+                        })
+                    else:
+                        console.print(f"[red]Failed to push in {sp.name}[/red]:\n{res.stderr}")
+                else:
+                    console.print(f"Skipped {sp.name}")
+        else:
+            branch = _get_current_branch(sp)
+            if not branch:
                 continue
 
-            if _confirm(f"Push {ahead} commit(s) in {sp.name}?", auto):
-                remote_head_before = _get_remote_head(sp, upstream)
-                res = _run_git(["push"], sp)
+            remotes_res = _run_git(["remote"], sp)
+            if remotes_res.returncode != 0 or not remotes_res.stdout.strip():
+                console.print(f"[yellow]Skipping {sp.name}: No remote configured[/yellow]")
+                continue
+            remotes = remotes_res.stdout.strip().split()
+            remote = "origin" if "origin" in remotes else remotes[0]
+
+            target_upstream = f"{remote}/{branch}"
+            if _confirm(f"Push branch '{branch}' and set upstream to {target_upstream} in {sp.name}?", auto):
+                remote_head_before = _get_remote_head(sp, target_upstream)
+                res = _run_git(["push", "--set-upstream", remote, branch], sp)
                 if res.returncode == 0:
                     console.print(f"[green]Pushed in {sp.name}[/green]")
                     affected.append({
                         "path": str(sp.relative_to(project_root)),
-                        "upstream": upstream,
-                        "old_remote_head": remote_head_before
+                        "upstream": target_upstream,
+                        "old_remote_head": remote_head_before,
+                        "had_upstream": False
                     })
                 else:
                     console.print(f"[red]Failed to push in {sp.name}[/red]:\n{res.stderr}")
@@ -612,12 +638,18 @@ def cmd_undo(
             # Undo push
             old_remote_head = item.get("old_remote_head")
             upstream = item.get("upstream")
-            if old_remote_head and upstream:
-                # upstream is typically e.g. origin/main. We need the remote name and the branch.
+            if item.get("had_upstream", True) is False:
+                branch = _get_current_branch(sp)
+                if branch:
+                    _run_git(["branch", "--unset-upstream", branch], sp)
+            if upstream:
                 parts = upstream.split("/", 1)
                 if len(parts) == 2:
                     remote, remote_branch = parts[0], parts[1]
-                    res = _run_git(["push", "--force-with-lease", remote, f"{old_remote_head}:{remote_branch}"], sp)
+                    if old_remote_head:
+                        res = _run_git(["push", "--force-with-lease", remote, f"{old_remote_head}:{remote_branch}"], sp)
+                    else:
+                        res = _run_git(["push", remote, f":{remote_branch}"], sp)
                     if res.returncode == 0:
                         console.print(f"[green]Undid push in {sp.name}[/green]")
                     else:
