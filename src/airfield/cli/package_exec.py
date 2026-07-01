@@ -167,6 +167,32 @@ def resolve_package_context(
     return pkg_dir, pkg, deps, source_root
 
 
+def _apply_project_default_base_image(pkg: Package, pkg_dir: Path) -> None:
+    """Inherit a project-level default ``base_image`` when the package doesn't set one.
+
+    Lets a whole project pin one base image (e.g. a custom L4T image) in a single
+    place — the project's ``airfield.yaml`` ``base_image:`` field — instead of
+    repeating it in every package's ``airfield.yaml``. An explicit per-package
+    ``base_image`` still wins; a standalone package (no enclosing project) is
+    unaffected and falls back to the ROS/ubuntu default as before.
+    """
+    if pkg.base_image:
+        return
+    root = find_project_root(pkg_dir)
+    if root is None:
+        return
+    proj_cfg = root / AIRFIELD_CONFIG
+    if not proj_cfg.exists():
+        return
+    try:
+        data = yaml.safe_load(proj_cfg.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError:
+        return
+    default_base = data.get("base_image")
+    if isinstance(default_base, str) and default_base.strip():
+        pkg.base_image = default_base.strip()
+
+
 def build_package_image(
     pkg_dir: Path,
     pkg: Package,
@@ -175,6 +201,7 @@ def build_package_image(
     show_all_output: bool = False,
 ) -> str:
     _apply_locked_dependency_versions(pkg)
+    _apply_project_default_base_image(pkg, pkg_dir)
     _validate_and_configure_host_dependencies(pkg, deps)
 
     builder = Builder(package=pkg, dependencies=deps, target_device=target_device)

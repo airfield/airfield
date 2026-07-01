@@ -54,11 +54,11 @@ def test_package_build(cli_runner, mock_package_context):
 def test_package_shell(cli_runner, mock_package_context, mock_docker):
     mock_docker.return_value.returncode = 0
     result = cli_runner.invoke(app, ["package", "shell", "."])
-    
+
     assert result.exit_code == 0
     called_args = mock_docker.call_args[0][0]
     assert called_args[0] == "docker"
-    assert "/bin/zsh" in called_args
+    assert "/bin/bash" in called_args
 
 def test_package_run(cli_runner, mock_package_context, mock_docker):
     mock_docker.return_value.returncode = 0
@@ -93,11 +93,11 @@ def test_package_shell_implicit(cli_runner, mock_package_context, mock_docker, m
     mocker.patch("airfield.cli.pkg_shell.in_airfield_container", return_value=False)
     mocker.patch("airfield.config.find_package_root", return_value=Path("."))
     result = cli_runner.invoke(app, ["package", "shell"])
-    
+
     assert result.exit_code == 0
     called_args = mock_docker.call_args[0][0]
     assert called_args[0] == "docker"
-    assert "/bin/zsh" in called_args
+    assert "/bin/bash" in called_args
 
 def test_package_run_implicit(cli_runner, mock_package_context, mock_docker, mocker):
     mock_docker.return_value.returncode = 0
@@ -128,7 +128,49 @@ def test_package_cmd_implicit(cli_runner, mock_package_context, mock_docker, moc
     mocker.patch("airfield.cli.pkg_cmd.resolve_package_context", return_value=(Path("."), mock_package_context, [], Path(".")))
 
     result = cli_runner.invoke(app, ["package", "cmd", "--", "echo", "hello"])
-    
+
     assert result.exit_code == 0
     called_args = mock_docker.call_args[0][0]
     assert called_args[-3:] == ["/bin/bash", "-lc", "echo hello"]
+
+
+def _make_project_with_package(tmp_path, *, project_base=None, package_base=None):
+    proj = "kind: project\nname: proj\n"
+    if project_base:
+        proj += f"base_image: {project_base}\n"
+    (tmp_path / "airfield.yaml").write_text(proj, encoding="utf-8")
+    pkg_dir = tmp_path / "packages" / "p"
+    pkg_dir.mkdir(parents=True)
+    pkgcfg = "kind: package\nname: p\n"
+    if package_base:
+        pkgcfg += f"base_image: {package_base}\n"
+    (pkg_dir / "airfield.yaml").write_text(pkgcfg, encoding="utf-8")
+    return pkg_dir
+
+
+def test_project_default_base_image_inherited(tmp_path):
+    """A package without base_image inherits the project-level default."""
+    from airfield.cli.package_exec import _apply_project_default_base_image
+    pkg_dir = _make_project_with_package(tmp_path, project_base="my/base:1")
+    pkg = Package(name="p")
+    assert pkg.base_image is None
+    _apply_project_default_base_image(pkg, pkg_dir)
+    assert pkg.base_image == "my/base:1"
+
+
+def test_project_default_base_image_does_not_override_explicit(tmp_path):
+    """An explicit per-package base_image wins over the project default."""
+    from airfield.cli.package_exec import _apply_project_default_base_image
+    pkg_dir = _make_project_with_package(tmp_path, project_base="my/base:1")
+    pkg = Package(name="p", base_image="explicit/base:2")
+    _apply_project_default_base_image(pkg, pkg_dir)
+    assert pkg.base_image == "explicit/base:2"
+
+
+def test_project_default_base_image_absent_leaves_none(tmp_path):
+    """No project default and no package value -> base_image stays None (ROS/ubuntu fallback)."""
+    from airfield.cli.package_exec import _apply_project_default_base_image
+    pkg_dir = _make_project_with_package(tmp_path, project_base=None)
+    pkg = Package(name="p")
+    _apply_project_default_base_image(pkg, pkg_dir)
+    assert pkg.base_image is None
