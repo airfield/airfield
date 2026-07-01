@@ -4,7 +4,10 @@ import pwd
 import re
 import glob
 import shutil
+import signal
+import subprocess
 import sys
+import uuid
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -12,9 +15,57 @@ import typer
 import yaml
 
 from airfield.builder import Builder
-from airfield.config import AIRFIELD_CONFIG, AIRFIELD_LOCAL_CONFIG, dependencies_dir, dependency_search_paths, find_project_root, packages_dir, require_package_root, is_arm_mac
+from airfield.config import AIRFIELD_CONFIG, AIRFIELD_LOCAL_CONFIG, dependencies_dir, dependency_search_paths, find_project_root, packages_dir, require_package_root, is_arm_mac, is_arm64
 from airfield.host_check import detect_host_facts, evaluate_host_dependencies
 from airfield.models import Dependency, Package, SUPPORTED_ROS_DISTROS
+
+
+def run_container_foreground(run_cmd: List[str]) -> int:
+    """Run a container in the foreground, tearing it down if we're interrupted.
+
+    `docker run` without a TTY proxies our signal to PID 1 (``bash -lc ...``), but a
+    non-interactive bash does not forward it to the workload, so on Ctrl-C / SIGTERM
+    the container survives as an orphan that keeps holding host resources (e.g. the
+    CSI camera's single Argus capture session, which then makes the next run fail
+    with ``Failed to create CaptureSession``). To make interruption reliable
+    regardless of how the in-container process tree handles signals, we name the
+    container and stop it explicitly: ``docker stop`` SIGTERMs PID 1 and SIGKILLs the
+    whole container after a short grace period, and ``--rm`` reaps it.
+
+    Only the ``docker`` engine is handled specially; any other engine (e.g. the
+    arm64 macOS ``container`` runtime) falls through to an unchanged blocking run.
+    Returns the child's exit code.
+    """
+    if not run_cmd or run_cmd[0] != "docker":
+        return subprocess.run(run_cmd).returncode
+
+    name = f"airfield-run-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+    # insert `--name <name>` immediately after the `run` subcommand
+    named_cmd = [run_cmd[0], run_cmd[1], "--name", name, *run_cmd[2:]]
+
+    def _stop() -> None:
+        subprocess.run(
+            ["docker", "stop", "-t", "2", name],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+
+    proc = subprocess.Popen(named_cmd)
+
+    def _on_term(_signum, _frame) -> None:
+        # `timeout` sends SIGTERM to us (not the container); stop it ourselves.
+        _stop()
+
+    previous = signal.signal(signal.SIGTERM, _on_term)
+    try:
+        return proc.wait()
+    except KeyboardInterrupt:
+        # Ctrl-C reached the docker client but not the in-container workload.
+        _stop()
+        return proc.wait()
+    finally:
+        signal.signal(signal.SIGTERM, previous)
 
 
 def _resolve_package_ros_distro(pkg: Package, project_root: Optional[Path]) -> Optional[str]:
@@ -47,7 +98,11 @@ def resolve_package_context(
             pkg_dir = require_package_root()
         else:
             candidate = Path(package_name).expanduser()
-            if candidate.exists():
+            # Only treat a CWD-relative path as the package if it's actually an
+            # airfield package (has airfield.yaml). Otherwise a same-named non-
+            # package dir at the project root (e.g. `rviz2/` configs or the
+            # `simulator/` Unity build) would shadow `packages/<name>`.
+            if candidate.exists() and (candidate / AIRFIELD_CONFIG).exists():
                 pkg_dir = candidate.resolve()
             else:
                 pkg_dir = (packages_dir(root) / package_name).resolve()
@@ -285,6 +340,38 @@ def in_airfield_container() -> bool:
     return os.environ.get("IN_AIRFIELD_CONTAINER") == "1"
 
 
+def _collect_peer_source_mounts(
+    pkg: Package, root: Path, search_paths: List[Path]
+) -> List[Tuple[str, Path]]:
+    """Recursively find peer-package dependencies: custom packages living in
+    ``packages/<name>/`` that have no dependency manifest (so they are built
+    from source rather than apt-installed). Their source must be mounted into
+    the workspace alongside the dependent package so colcon can build them
+    together — e.g. ``ut_automata`` does ``find_package(amrl_msgs)`` and needs
+    ``amrl_msgs``/``amrl_maps`` present. Build with
+    ``colcon build --packages-up-to <pkg>`` so peers compile first."""
+    peers = {}
+    seen = set()
+    queue = list(pkg.dependencies)
+    while queue:
+        dep = queue.pop(0)
+        if dep in seen:
+            continue
+        seen.add(dep)
+        # A dep resolved by a manifest is apt-installed — there's no source to mount.
+        if any((sp / f"{dep}.yaml").exists() for sp in search_paths):
+            continue
+        peer_dir = packages_dir(root) / dep
+        if not (peer_dir / AIRFIELD_CONFIG).exists():
+            continue
+        peer_pkg = Package.load(peer_dir / AIRFIELD_CONFIG)
+        peer_src = (peer_dir / peer_pkg.source_path).resolve()
+        if peer_pkg.name not in peers:
+            peers[peer_pkg.name] = peer_src
+        queue.extend(peer_pkg.dependencies)
+    return list(peers.items())
+
+
 def docker_mount_args(pkg_dir: Path, pkg: Package, source_root: Path) -> List[str]:
     """Build docker -v mount arguments from package source and config mounts."""
     mount_args: List[str] = []
@@ -293,6 +380,20 @@ def docker_mount_args(pkg_dir: Path, pkg: Package, source_root: Path) -> List[st
     mount_args.extend(["-v", f"{source_root}:{container_src}"])
 
     seen_mounts = {str(source_root)}
+
+    # Mount peer-package sources (custom deps built from source, e.g. amrl_msgs)
+    # so colcon can build them alongside this package via --packages-up-to.
+    root = find_project_root()
+    if root is not None:
+        target = "arm64" if is_arm64() else "x86_64"
+        for peer_name, peer_src in _collect_peer_source_mounts(
+            pkg, root, dependency_search_paths(root, target)
+        ):
+            if str(peer_src) in seen_mounts or not peer_src.exists():
+                continue
+            mount_args.extend(["-v", f"{peer_src}:{container_source_mount_path(peer_name)}"])
+            seen_mounts.add(str(peer_src))
+
     for mount in _configured_mounts(pkg_dir):
         mount_path = Path(mount).expanduser()
         if not mount_path.is_absolute():
@@ -313,6 +414,18 @@ def docker_mount_args(pkg_dir: Path, pkg: Package, source_root: Path) -> List[st
 
         mount_args.extend(["-v", f"{mount_path}:{mount_path}"])
         seen_mounts.add(mount_str)
+
+    # Pass through declared host devices (e.g. VESC serial /dev/ttyACM0, joystick
+    # /dev/input/js0) and supplementary groups (e.g. dialout) so nodes can access
+    # hardware. Devices that aren't present are skipped so the container still
+    # starts and the node reports the missing device itself.
+    for dev in pkg.devices:
+        if Path(dev).exists():
+            mount_args.extend(["--device", dev])
+        else:
+            print(f"[WARN] Skipping device '{dev}': not present on host")
+    for grp in pkg.group_add:
+        mount_args.extend(["--group-add", grp])
 
     return mount_args
 
@@ -343,9 +456,14 @@ def gpu_runtime_args() -> List[str]:
     if install_target != "gpu":
         return []
 
+    # On Jetson/L4T, EGL and the Tegra GStreamer plugins (e.g. nvarguscamerasrc)
+    # are only mounted into the container when the 'graphics'/'video'/'display'
+    # driver capabilities are requested; 'compute,utility' alone leaves
+    # libEGL.so.1 missing and CSI camera capture fails.
+    driver_caps = "all" if _is_jetson() else "compute,utility"
     args: List[str] = [
         "-e", "NVIDIA_VISIBLE_DEVICES=all",
-        "-e", "NVIDIA_DRIVER_CAPABILITIES=compute,utility",
+        "-e", f"NVIDIA_DRIVER_CAPABILITIES={driver_caps}",
     ]
 
     engine = _container_engine_alias()
@@ -354,6 +472,10 @@ def gpu_runtime_args() -> List[str]:
             args.extend(["--runtime", "nvidia"])
         else:
             args.extend(["--gpus", "all"])
+
+    # Mount the Argus camera daemon socket so CSI cameras work inside the container.
+    if _is_jetson() and Path("/tmp/argus_socket").exists():
+        args.extend(["-v", "/tmp/argus_socket:/tmp/argus_socket"])
     elif engine == "podman":
         for hook_dir in ("/usr/share/containers/oci/hooks.d", "/etc/containers/oci/hooks.d"):
             if Path(hook_dir).exists():
@@ -368,6 +490,10 @@ def gpu_runtime_args() -> List[str]:
         "/dev/nvidia-modeset",
         *glob.glob("/dev/nvidia[0-9]*"),
     }
+    # On Jetson, pass through V4L2 video nodes so CSI/USB cameras are visible
+    # inside the container (e.g. nvarguscamerasrc / OpenCV capture).
+    if _is_jetson():
+        device_candidates.update(glob.glob("/dev/video[0-9]*"))
     for dev in sorted(device_candidates):
         if Path(dev).exists():
             args.extend(["--device", dev])

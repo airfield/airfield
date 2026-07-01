@@ -42,7 +42,7 @@ def run(
             "-w", container_workdir(pkg),
             *runtime_gpu_args,
             image_name,
-            "/bin/zsh", "-l",
+            "/bin/bash", "-l",
         ]
     else:
         run_cmd = [
@@ -53,7 +53,7 @@ def run(
             "-w", container_workdir(pkg),
             *runtime_gpu_args,
             image_name,
-            "/bin/zsh", "-l",
+            "/bin/bash", "-l",
         ]
     result = subprocess.run(run_cmd)
     if result.returncode != 0:

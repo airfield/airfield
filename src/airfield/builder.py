@@ -181,13 +181,20 @@ class Builder:
         else:
             lines.append(f"RUN {apt_install}")
 
+        # Upgrading pip is best-effort: on PEP 668 distros (e.g. Ubuntu 24.04) the
+        # system pip is debian-managed and may refuse to upgrade. Don't fail the
+        # build over it; the existing pip is sufficient.
         if cache_mounts_enabled:
             lines.append(
                 "RUN --mount=type=cache,target=/root/.cache/pip \\\n"
-                "    python3 -m pip install --upgrade pip"
+                "    python3 -m pip install --break-system-packages --upgrade pip || \\\n"
+                "    python3 -m pip install --upgrade pip || true"
             )
         else:
-            lines.append("RUN python3 -m pip install --upgrade pip")
+            lines.append(
+                "RUN python3 -m pip install --break-system-packages --upgrade pip || "
+                "python3 -m pip install --upgrade pip || true"
+            )
 
         if install_local_airfield:
             lines.append("COPY airfield /opt/airfield")
@@ -344,11 +351,15 @@ class Builder:
                     str(build_root),
                 ]
             else:
+                # `--pull` always refreshes the base image from a registry. Skip it
+                # when AIRFIELD_NO_PULL is set so packages can use a locally-built
+                # base image (e.g. a custom L4T base) that is not in any registry.
+                no_pull = os.environ.get("AIRFIELD_NO_PULL", "").strip().lower() in {"1", "true", "yes"}
                 cmd = [
                     "docker", "build",
                     "--network", "host",
                     "--platform", self._resolve_docker_platform() or self.target_device,
-                    "--pull",
+                    *([] if no_pull else ["--pull"]),
                     "--build-arg", f"UID={uid}",
                     "--build-arg", f"GID={gid}",
                     "--build-arg", f"USERNAME={username}",

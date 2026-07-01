@@ -68,6 +68,8 @@ class Package(BaseModel):
     ros_distro: Optional[str] = None
     base_image: Optional[str] = None
     default_workdir: Optional[str] = None
+    devices: List[str] = Field(default_factory=list)
+    group_add: List[str] = Field(default_factory=list)
     run: Dict[str, str] = Field(default_factory=dict)
     
     @classmethod
@@ -94,6 +96,11 @@ class Package(BaseModel):
         base_image = data.get("base_image")
         if isinstance(base_image, str):
             data["base_image"] = base_image.strip() or None
+
+        # Devices (e.g. /dev/ttyACM0) and supplementary group ids/names are
+        # normalized to clean string lists (YAML may parse GIDs as ints).
+        data["devices"] = [str(d).strip() for d in (data.get("devices") or []) if str(d).strip()]
+        data["group_add"] = [str(g).strip() for g in (data.get("group_add") or []) if str(g).strip()]
 
         raw_run = data.get("run", {})
         if raw_run is None:

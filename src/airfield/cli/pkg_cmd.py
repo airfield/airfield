@@ -12,6 +12,7 @@ from airfield.cli.package_exec import (
     gpu_runtime_args,
     in_airfield_container,
     resolve_package_context,
+    run_container_foreground,
 )
 
 
@@ -91,6 +92,6 @@ def run(
             "/bin/bash", "-lc", command_text,
         ]
 
-    result = subprocess.run(run_cmd)
-    if result.returncode != 0:
-        raise typer.Exit(result.returncode)
+    returncode = run_container_foreground(run_cmd)
+    if returncode != 0:
+        raise typer.Exit(returncode)
