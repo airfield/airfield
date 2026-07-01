@@ -16,7 +16,7 @@ windows:
       {%- for pane in window.panes %}
         {%- if pane is none %}
         -
-        {%- elif pane is string %}
+        {%- elif pane is string %}1
           {%- if pane == "" %}
         -
           {%- else %}
@@ -24,7 +24,7 @@ windows:
           {%- endif %}
         {%- else %}
           {%- if pane.package %}
-        - airfield package cmd {{ pane.package }} -- {{ pane.cmd }}
+        - airfield package cmd {{ pane.package }} -- bash -lc 'cd ~/workspace && mkdir -p build install log && if colcon list -n 2>/dev/null | grep -qx {{ pane.package }} && [ ! -e install/{{ pane.package }} ]; then flock log/.colcon_build.lock colcon build --packages-up-to {{ pane.package }} || exit 1; fi && if [ -f install/setup.bash ]; then source install/setup.bash; fi && {{ pane.cmd }}'
           {%- else %}
         - {{ pane.cmd }}
           {%- endif %}
