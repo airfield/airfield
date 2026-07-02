@@ -24,7 +24,12 @@ windows:
           {%- endif %}
         {%- else %}
           {%- if pane.package %}
-        - airfield package cmd {{ pane.package }} -- {{ pane.cmd }}
+        {#- The cmd is double-quoted into a single bash -lc argument so shell
+            syntax (&&, ;, loops, pipes) executes INSIDE the container, not in
+            the host pane shell (which would split the airfield invocation).
+            Host-side $VAR expansion still happens (double quotes), so env like
+            $HOME or ${MAP:-default} resolves at launch time. #}
+        - airfield package cmd {{ pane.package }} -- bash -lc "{{ pane.cmd | replace("\\", "\\\\") | replace("\"", "\\\"") }}"
           {%- else %}
         - {{ pane.cmd }}
           {%- endif %}

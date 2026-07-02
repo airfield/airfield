@@ -56,6 +56,8 @@ def test_up_new_schema_plan(cli_runner, temp_workspace, mock_docker):
         "      - vnc\n"
         "      - package: pkg_a\n"
         "        cmd: ros2 run pkg_a node_a\n"
+        "      - package: pkg_b\n"
+        "        cmd: until [ -S /tmp/sock ]; do sleep 1; done && DISPLAY=:9 run -p mode:=\"none\"\n"
         "      - cmd: echo 'host cmd'\n",
         encoding="utf-8"
     )
@@ -75,10 +77,15 @@ def test_up_new_schema_plan(cli_runner, temp_workspace, mock_docker):
     window = content["windows"][0]["sim_window"]
     assert window["layout"] == "main-vertical"
     assert window["pre_window"] == "echo 'starting'"
+    # Package pane cmds are double-quoted into ONE bash -lc argument so shell
+    # syntax (&&, ;, loops) runs inside the container rather than being split
+    # by the host pane shell; literal double quotes in the cmd are escaped.
     assert window["panes"] == [
         None,
         "vnc",
-        "airfield package cmd pkg_a -- ros2 run pkg_a node_a",
+        'airfield package cmd pkg_a -- bash -lc "ros2 run pkg_a node_a"',
+        'airfield package cmd pkg_b -- bash -lc "until [ -S /tmp/sock ]; do sleep 1; done'
+        ' && DISPLAY=:9 run -p mode:=\\"none\\""',
         "echo 'host cmd'"
     ]
 
