@@ -174,3 +174,78 @@ def test_project_default_base_image_absent_leaves_none(tmp_path):
     pkg = Package(name="p")
     _apply_project_default_base_image(pkg, pkg_dir)
     assert pkg.base_image is None
+
+
+def test_run_container_foreground_stops_container_on_sighup(mocker):
+    """SIGHUP (tmux kill-server / terminal close) must docker-stop the named
+    container instead of orphaning it."""
+    import os
+    import signal
+    from airfield.cli.package_exec import run_container_foreground
+
+    stop_calls = []
+
+    def fake_run(cmd, **kwargs):
+        stop_calls.append(cmd)
+        return mocker.Mock(returncode=0)
+
+    mocker.patch("airfield.cli.package_exec.subprocess.run", side_effect=fake_run)
+
+    proc = mocker.Mock()
+
+    def wait_side_effect():
+        if not stop_calls:
+            # Simulate tmux kill-server while blocked on the docker client.
+            os.kill(os.getpid(), signal.SIGHUP)
+        return 137
+
+    proc.wait.side_effect = wait_side_effect
+    mocker.patch("airfield.cli.package_exec.subprocess.Popen", return_value=proc)
+
+    rc = run_container_foreground(["docker", "run", "--rm", "img", "true"])
+
+    assert rc == 137
+    assert stop_calls, "SIGHUP did not trigger a docker stop"
+    assert stop_calls[0][:2] == ["docker", "stop"]
+    assert stop_calls[0][-1].startswith("airfield-run-")
+    # handler must be restored on exit
+    assert signal.getsignal(signal.SIGHUP) == signal.SIG_DFL
+
+
+def test_run_container_foreground_respects_ignored_sighup(mocker):
+    """If SIGHUP is inherited as SIG_IGN (nohup), airfield must not override it."""
+    import signal
+    from airfield.cli.package_exec import run_container_foreground
+
+    previous = signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    try:
+        seen = {}
+        proc = mocker.Mock()
+
+        def wait_side_effect():
+            seen["handler"] = signal.getsignal(signal.SIGHUP)
+            return 0
+
+        proc.wait.side_effect = wait_side_effect
+        mocker.patch("airfield.cli.package_exec.subprocess.Popen", return_value=proc)
+        mocker.patch("airfield.cli.package_exec.subprocess.run")
+
+        rc = run_container_foreground(["docker", "run", "--rm", "img", "true"])
+
+        assert rc == 0
+        assert seen["handler"] is signal.SIG_IGN
+        assert signal.getsignal(signal.SIGHUP) is signal.SIG_IGN
+    finally:
+        signal.signal(signal.SIGHUP, previous)
+
+
+def test_package_cmd_wraps_ros_package_with_entry(cli_runner, mock_package_context, mock_docker):
+    """ROS packages route through the in-container build-if-needed entry script."""
+    mock_package_context.ros_distro = "jazzy"
+    mock_docker.return_value.returncode = 0
+    result = cli_runner.invoke(app, ["package", "cmd", ".", "--", "ros2", "run", "x", "y"])
+    assert result.exit_code == 0
+    called_args = mock_docker.call_args[0][0]
+    assert called_args[-2:] == ["/opt/airfield-entry.sh", "ros2 run x y"]
+    i = called_args.index("AIRFIELD_BUILD_PKG=test_pkg")
+    assert called_args[i - 1] == "-e"

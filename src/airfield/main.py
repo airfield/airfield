@@ -2,7 +2,7 @@ import typer
 from rich.console import Console
 from typer.core import TyperGroup
 
-from airfield.cli import build, dependencies_upstream, doctor, docker_cache_cmd, liftoff, pkg_cmd, pkg_deinit, pkg_init, pkg_run, pkg_shell, proj_deinit, proj_init, run, status, subprojects, up
+from airfield.cli import build, dependencies_upstream, doctor, docker_cache_cmd, down, liftoff, pkg_cmd, pkg_deinit, pkg_init, pkg_run, pkg_shell, proj_deinit, proj_init, run, status, subprojects, up
 from airfield.cli import tools_system
 from airfield.config import ensure_airfield_runtime_dirs, find_package_root, find_project_root
 
@@ -71,6 +71,7 @@ proj_app.command(name="deinit")(proj_deinit.run)
 proj_app.command(name="run")(run.run)
 proj_app.command(name="liftoff")(liftoff.run)
 proj_app.command(name="up")(up.run)
+proj_app.command(name="down")(down.run)
 
 tools_system_app.command(name="clean")(tools_system.run)
 tools_system_app.command(name="setup")(tools_system.setup)

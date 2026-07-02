@@ -9,6 +9,7 @@ from airfield.cli.package_exec import (
     build_package_image,
     container_workdir,
     docker_mount_args,
+    entry_wrap_args,
     gpu_runtime_args,
     in_airfield_container,
     resolve_package_context,
@@ -69,16 +70,18 @@ def run(
     mount_args = docker_mount_args(pkg_dir, pkg, source_root)
     runtime_gpu_args = gpu_runtime_args()
     command_text = shlex.join(command)
+    entry_env_args, container_cmd = entry_wrap_args(pkg, command_text)
     print(f"Build successful. Running command in {image_name}: {command_text}")
 
     if is_arm_mac():
         run_cmd = [
             "container", "run", "--rm",
             *mount_args,
+            *entry_env_args,
             "-w", container_workdir(pkg),
             *runtime_gpu_args,
             image_name,
-            "/bin/bash", "-lc", command_text,
+            *container_cmd,
         ]
     else:
         run_cmd = [
@@ -86,10 +89,11 @@ def run(
             "--group-add", "0",
             "--ipc=host", "--network=host",
             *mount_args,
+            *entry_env_args,
             "-w", container_workdir(pkg),
             *runtime_gpu_args,
             image_name,
-            "/bin/bash", "-lc", command_text,
+            *container_cmd,
         ]
 
     returncode = run_container_foreground(run_cmd)

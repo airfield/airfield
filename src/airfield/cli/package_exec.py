@@ -24,7 +24,8 @@ def run_container_foreground(run_cmd: List[str]) -> int:
     """Run a container in the foreground, tearing it down if we're interrupted.
 
     `docker run` without a TTY proxies our signal to PID 1 (``bash -lc ...``), but a
-    non-interactive bash does not forward it to the workload, so on Ctrl-C / SIGTERM
+    non-interactive bash does not forward it to the workload, so on Ctrl-C, SIGTERM,
+    or SIGHUP (tmux kill-server / terminal close)
     the container survives as an orphan that keeps holding host resources (e.g. the
     CSI camera's single Argus capture session, which then makes the next run fail
     with ``Failed to create CaptureSession``). To make interruption reliable
@@ -57,7 +58,15 @@ def run_container_foreground(run_cmd: List[str]) -> int:
         # `timeout` sends SIGTERM to us (not the container); stop it ourselves.
         _stop()
 
-    previous = signal.signal(signal.SIGTERM, _on_term)
+    previous_term = signal.signal(signal.SIGTERM, _on_term)
+    # `tmux kill-server` / closing the terminal sends SIGHUP. Python's default
+    # action terminates us without running handlers or `finally`, so the docker
+    # client dies but the container survives as an orphan (still holding e.g. a
+    # display socket or camera session). Trap it like SIGTERM — unless SIGHUP is
+    # already ignored (`nohup`), which we must not override.
+    previous_hup = signal.getsignal(signal.SIGHUP)
+    if previous_hup is not signal.SIG_IGN:
+        signal.signal(signal.SIGHUP, _on_term)
     try:
         return proc.wait()
     except KeyboardInterrupt:
@@ -65,7 +74,26 @@ def run_container_foreground(run_cmd: List[str]) -> int:
         _stop()
         return proc.wait()
     finally:
-        signal.signal(signal.SIGTERM, previous)
+        signal.signal(signal.SIGTERM, previous_term)
+        if previous_hup is not signal.SIG_IGN:
+            signal.signal(signal.SIGHUP, previous_hup)
+
+
+def entry_wrap_args(pkg: Optional[Package], command_text: str) -> Tuple[List[str], List[str]]:
+    """Container env args + command vector for `package cmd` / `package run`.
+
+    ROS packages route through /opt/airfield-entry.sh (baked into their image),
+    which builds the target colcon package into the shared workspace if it is
+    not built yet — a no-op for apt-only tool packages and already-built ones —
+    then execs a login shell running the command. Non-ROS packages run the
+    login shell directly (their image has no entry script).
+    """
+    if pkg is not None and pkg.ros_distro:
+        env_args = ["-e", f"AIRFIELD_BUILD_PKG={pkg.name}"]
+        if pkg.colcon_args:
+            env_args.extend(["-e", f"AIRFIELD_COLCON_ARGS={pkg.colcon_args}"])
+        return env_args, ["/opt/airfield-entry.sh", command_text]
+    return [], ["/bin/bash", "-lc", command_text]
 
 
 def _resolve_package_ros_distro(pkg: Package, project_root: Optional[Path]) -> Optional[str]:

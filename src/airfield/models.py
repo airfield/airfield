@@ -67,6 +67,9 @@ class Package(BaseModel):
     source_path: str = "src"
     ros_distro: Optional[str] = None
     base_image: Optional[str] = None
+    # Extra args appended to the auto `colcon build` run by the container entry
+    # wrapper, e.g. "--cmake-args -DCMAKE_BUILD_MODE=Hardware".
+    colcon_args: Optional[str] = None
     default_workdir: Optional[str] = None
     devices: List[str] = Field(default_factory=list)
     group_add: List[str] = Field(default_factory=list)
@@ -96,6 +99,10 @@ class Package(BaseModel):
         base_image = data.get("base_image")
         if isinstance(base_image, str):
             data["base_image"] = base_image.strip() or None
+
+        colcon_args = data.get("colcon_args")
+        if isinstance(colcon_args, str):
+            data["colcon_args"] = colcon_args.strip() or None
 
         # Devices (e.g. /dev/ttyACM0) and supplementary group ids/names are
         # normalized to clean string lists (YAML may parse GIDs as ints).
