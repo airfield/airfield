@@ -249,3 +249,45 @@ def test_package_cmd_wraps_ros_package_with_entry(cli_runner, mock_package_conte
     assert called_args[-2:] == ["/opt/airfield-entry.sh", "ros2 run x y"]
     i = called_args.index("AIRFIELD_BUILD_PKG=test_pkg")
     assert called_args[i - 1] == "-e"
+
+
+class TestGpuRuntimeArgs:
+    """Jetson GPU/camera passthrough is always-on; elsewhere it is opt-in via
+    TORCH_INSTALL_TARGET=gpu. Plans must run identically on a fresh checkout,
+    so basic Jetson hardware access cannot hinge on a torch env var."""
+
+    def _clear_torch_env(self, monkeypatch):
+        for var in ("AIRFIELD_TORCH_INSTALL_TARGET", "TORCH_INSTALL_TARGET"):
+            monkeypatch.delenv(var, raising=False)
+
+    def test_non_jetson_without_env_returns_nothing(self, mocker, monkeypatch):
+        from airfield.cli import package_exec
+        self._clear_torch_env(monkeypatch)
+        mocker.patch("airfield.cli.package_exec._is_jetson", return_value=False)
+        assert package_exec.gpu_runtime_args() == []
+
+    def test_jetson_enables_gpu_without_any_env(self, mocker, monkeypatch):
+        from airfield.cli import package_exec
+        self._clear_torch_env(monkeypatch)
+        mocker.patch("airfield.cli.package_exec._is_jetson", return_value=True)
+        mocker.patch(
+            "airfield.cli.package_exec._container_engine_alias",
+            return_value="docker",
+        )
+        args = package_exec.gpu_runtime_args()
+        assert "--runtime" in args
+        assert "nvidia" in args
+        assert "NVIDIA_DRIVER_CAPABILITIES=all" in args
+
+    def test_non_jetson_gpu_env_opts_in(self, mocker, monkeypatch):
+        from airfield.cli import package_exec
+        self._clear_torch_env(monkeypatch)
+        monkeypatch.setenv("TORCH_INSTALL_TARGET", "gpu")
+        mocker.patch("airfield.cli.package_exec._is_jetson", return_value=False)
+        mocker.patch(
+            "airfield.cli.package_exec._container_engine_alias",
+            return_value="docker",
+        )
+        args = package_exec.gpu_runtime_args()
+        assert "--gpus" in args
+        assert "NVIDIA_DRIVER_CAPABILITIES=compute,utility" in args

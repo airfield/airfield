@@ -508,7 +508,12 @@ def _is_jetson() -> bool:
 
 def gpu_runtime_args() -> List[str]:
     install_target = (os.environ.get("AIRFIELD_TORCH_INSTALL_TARGET") or os.environ.get("TORCH_INSTALL_TARGET") or "").strip().lower()
-    if install_target != "gpu":
+    # On Jetson the nvidia runtime is required for BASIC hardware access —
+    # CSI cameras (nvarguscamerasrc), EGL, CUDA — not just for torch, so it
+    # must not depend on a torch env var being set on the machine: plans have
+    # to run identically on a fresh checkout. Elsewhere, GPU passthrough
+    # remains opt-in via TORCH_INSTALL_TARGET=gpu.
+    if install_target != "gpu" and not _is_jetson():
         return []
 
     # On Jetson/L4T, EGL and the Tegra GStreamer plugins (e.g. nvarguscamerasrc)
