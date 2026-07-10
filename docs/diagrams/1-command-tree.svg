@@ -1,0 +1,149 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="960" viewBox="0 0 1500 960" font-family="Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="9" markerHeight="8" refX="8" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="#555555"/>
+    </marker>
+    <marker id="arrowTeal" markerWidth="9" markerHeight="8" refX="8" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="#2d6f8e"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1500" height="960" fill="#ffffff"/>
+
+  <!-- Title -->
+  <text x="750" y="42" text-anchor="middle" font-size="24" font-weight="bold" fill="#17607d">The airfield command tree</text>
+  <text x="750" y="68" text-anchor="middle" font-size="14" fill="#666666">every invocation is &#8220;airfield &lt;namespace&gt; &lt;command&gt; [args]&#8221; &#8212; the namespace tells you which level of the stack the command acts on</text>
+
+  <!-- Root box -->
+  <rect x="650" y="92" width="200" height="50" rx="10" fill="#2d5f73"/>
+  <text x="750" y="124" text-anchor="middle" font-size="20" font-weight="bold" font-family="Menlo, Consolas, monospace" fill="#ffffff">airfield</text>
+
+  <!-- Arrows root -> panels -->
+  <line x1="700" y1="142" x2="280" y2="206" stroke="#555555" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <line x1="750" y1="142" x2="750" y2="206" stroke="#555555" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <line x1="800" y1="142" x2="1218" y2="206" stroke="#555555" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <!-- ================ Panel 1: package ================ -->
+  <rect x="60" y="210" width="440" height="590" rx="12" fill="#e9f3f8" stroke="#b5d5e5" stroke-width="1.5"/>
+  <text x="90" y="248" font-size="19" font-weight="bold" font-family="Menlo, Consolas, monospace" fill="#17607d">package</text>
+  <text x="192" y="248" font-size="14" fill="#444444">&#8212; acts on <tspan font-weight="bold">ONE package</tspan></text>
+
+  <!-- package init -->
+  <rect x="85" y="268" width="390" height="80" rx="8" fill="#ffffff" stroke="#a9c6d6" stroke-width="1.2"/>
+  <text x="100" y="292" font-size="14.5" font-weight="bold" font-family="Menlo, Consolas, monospace" fill="#1f4e79">init</text>
+  <text x="100" y="313" font-size="12.5" fill="#555555">create a new package &#8212; or wrap an existing ROS</text>
+  <text x="100" y="331" font-size="12.5" fill="#555555">package in place (<tspan font-family="Menlo, Consolas, monospace">--path</tspan> reads its package.xml)</text>
+
+  <!-- package build -->
+  <rect x="85" y="360" width="390" height="80" rx="8" fill="#ffffff" stroke="#a9c6d6" stroke-width="1.2"/>
+  <text x="100" y="384" font-size="14.5" font-weight="bold" font-family="Menlo, Consolas, monospace" fill="#1f4e79">build &lt;pkg&gt;</text>
+  <text x="100" y="405" font-size="12.5" fill="#555555">build the package's container image</text>
+  <text x="100" y="423" font-size="12.5" fill="#555555">(<tspan font-family="Menlo, Consolas, monospace">airfield-pkg-&lt;pkg&gt;</tspan>) &#8212; see diagram 3</text>
+
+  <!-- package shell -->
+  <rect x="85" y="452" width="390" height="62" rx="8" fill="#ffffff" stroke="#a9c6d6" stroke-width="1.2"/>
+  <text x="100" y="476" font-size="14.5" font-weight="bold" font-family="Menlo, Consolas, monospace" fill="#1f4e79">shell &lt;pkg&gt;</text>
+  <text x="100" y="497" font-size="12.5" fill="#555555">open an interactive shell inside the container</text>
+
+  <!-- package run -->
+  <rect x="85" y="526" width="390" height="80" rx="8" fill="#ffffff" stroke="#a9c6d6" stroke-width="1.2"/>
+  <text x="100" y="550" font-size="14.5" font-weight="bold" font-family="Menlo, Consolas, monospace" fill="#1f4e79">run &lt;pkg&gt; [name]</text>
+  <text x="100" y="571" font-size="12.5" fill="#555555">run a named command from the package's</text>
+  <text x="100" y="589" font-size="12.5" fill="#555555"><tspan font-family="Menlo, Consolas, monospace">run:</tspan> map (lists the names if none given)</text>
+
+  <!-- package cmd -->
+  <rect x="85" y="618" width="390" height="62" rx="8" fill="#ffffff" stroke="#a9c6d6" stroke-width="1.2"/>
+  <text x="100" y="642" font-size="14.5" font-weight="bold" font-family="Menlo, Consolas, monospace" fill="#1f4e79">cmd &lt;pkg&gt; -- &lt;cmd&gt;</text>
+  <text x="100" y="663" font-size="12.5" fill="#555555">run any one-off command in the container</text>
+
+  <text x="100" y="712" font-size="12" font-style="italic" fill="#777777">also: <tspan font-family="Menlo, Consolas, monospace">deinit</tspan> &#183; <tspan font-family="Menlo, Consolas, monospace">dependencies check/upstream</tspan></text>
+  <text x="100" y="742" font-size="12" font-style="italic" fill="#777777">a package = one or more ROS packages shipped</text>
+  <text x="100" y="759" font-size="12" font-style="italic" fill="#777777">as a single container image (see diagram 2)</text>
+
+  <!-- ================ Panel 2: project ================ -->
+  <rect x="530" y="210" width="440" height="590" rx="12" fill="#fdf6e3" stroke="#e6d9a8" stroke-width="1.5"/>
+  <text x="560" y="248" font-size="19" font-weight="bold" font-family="Menlo, Consolas, monospace" fill="#8a6a15">project</text>
+  <text x="662" y="248" font-size="14" fill="#444444">&#8212; acts on the <tspan font-weight="bold">WHOLE workspace</tspan></text>
+
+  <!-- project init -->
+  <rect x="555" y="268" width="390" height="80" rx="8" fill="#ffffff" stroke="#dcc98c" stroke-width="1.2"/>
+  <text x="570" y="292" font-size="14.5" font-weight="bold" font-family="Menlo, Consolas, monospace" fill="#8a6a15">init</text>
+  <text x="570" y="313" font-size="12.5" fill="#555555">scaffold a new project (airfield.yaml,</text>
+  <text x="570" y="331" font-size="12.5" fill="#555555">packages/, dependencies/, plans/)</text>
+
+  <!-- project run -->
+  <rect x="555" y="360" width="390" height="62" rx="8" fill="#ffffff" stroke="#dcc98c" stroke-width="1.2"/>
+  <text x="570" y="384" font-size="14.5" font-weight="bold" font-family="Menlo, Consolas, monospace" fill="#8a6a15">run &lt;pkg&gt;</text>
+  <text x="570" y="405" font-size="12.5" fill="#555555">run one package's <tspan font-family="Menlo, Consolas, monospace">default</tspan> command</text>
+
+  <!-- project up (flagship) -->
+  <rect x="555" y="434" width="390" height="98" rx="8" fill="#ffffff" stroke="#8a6a15" stroke-width="2"/>
+  <text x="570" y="458" font-size="14.5" font-weight="bold" font-family="Menlo, Consolas, monospace" fill="#8a6a15">up &lt;plan&gt;</text>
+  <text x="570" y="479" font-size="12.5" fill="#555555">launch a whole plan as a tmux session &#8212;</text>
+  <text x="570" y="497" font-size="12.5" fill="#555555">one pane per entry, each in its package's</text>
+  <text x="570" y="515" font-size="12.5" fill="#555555">container (see diagrams 4 &amp; 5)</text>
+
+  <!-- project liftoff -->
+  <rect x="555" y="544" width="390" height="80" rx="8" fill="#ffffff" stroke="#dcc98c" stroke-width="1.2"/>
+  <text x="570" y="568" font-size="14.5" font-weight="bold" font-family="Menlo, Consolas, monospace" fill="#8a6a15">liftoff &lt;plan&gt;</text>
+  <text x="570" y="589" font-size="12.5" fill="#555555">simpler alternative to up: run each plan</text>
+  <text x="570" y="607" font-size="12.5" fill="#555555">package's <tspan font-family="Menlo, Consolas, monospace">default</tspan> in sequence (no tmux)</text>
+
+  <!-- project down -->
+  <rect x="555" y="636" width="390" height="80" rx="8" fill="#ffffff" stroke="#dcc98c" stroke-width="1.2"/>
+  <text x="570" y="660" font-size="14.5" font-weight="bold" font-family="Menlo, Consolas, monospace" fill="#8a6a15">down [plan]</text>
+  <text x="570" y="681" font-size="12.5" fill="#555555">kill the tmux session; each pane's container</text>
+  <text x="570" y="699" font-size="12.5" fill="#555555">stops with its pane</text>
+
+  <text x="570" y="748" font-size="12" font-style="italic" fill="#777777">also: <tspan font-family="Menlo, Consolas, monospace">deinit</tspan></text>
+
+  <!-- ================ Panel 3: peripheral ================ -->
+  <rect x="1000" y="210" width="440" height="590" rx="12" fill="#f5f5f5" stroke="#c8c8c8" stroke-width="1.5" stroke-dasharray="7,5"/>
+  <text x="1030" y="248" font-size="17" font-weight="bold" fill="#4a4a4a">everything else</text>
+  <text x="1188" y="248" font-size="14" fill="#666666">&#8212; support commands</text>
+
+  <rect x="1025" y="268" width="390" height="88" rx="8" fill="#ffffff" stroke="#c0c0c0" stroke-width="1.2"/>
+  <text x="1040" y="292" font-size="14.5" font-weight="bold" font-family="Menlo, Consolas, monospace" fill="#4a4a4a">subpackages &#8230;</text>
+  <text x="1040" y="313" font-size="12.5" fill="#555555">git across every source repo in the project</text>
+  <text x="1040" y="331" font-size="12.5" fill="#555555">at once (status / commit / push / pull / &#8230;)</text>
+
+  <rect x="1025" y="368" width="390" height="70" rx="8" fill="#ffffff" stroke="#c0c0c0" stroke-width="1.2"/>
+  <text x="1040" y="392" font-size="14.5" font-weight="bold" font-family="Menlo, Consolas, monospace" fill="#4a4a4a">system &#8230;</text>
+  <text x="1040" y="413" font-size="12.5" fill="#555555">host maintenance (clean, setup, update, alias)</text>
+
+  <rect x="1025" y="450" width="390" height="70" rx="8" fill="#ffffff" stroke="#c0c0c0" stroke-width="1.2"/>
+  <text x="1040" y="474" font-size="14.5" font-weight="bold" font-family="Menlo, Consolas, monospace" fill="#4a4a4a">docker cache</text>
+  <text x="1040" y="495" font-size="12.5" fill="#555555">image build-cache optimization</text>
+
+  <rect x="1025" y="532" width="390" height="70" rx="8" fill="#ffffff" stroke="#c0c0c0" stroke-width="1.2"/>
+  <text x="1040" y="556" font-size="14.5" font-weight="bold" font-family="Menlo, Consolas, monospace" fill="#4a4a4a">status</text>
+  <text x="1040" y="577" font-size="12.5" fill="#555555">where am I? project / package / container state</text>
+
+  <rect x="1025" y="614" width="390" height="70" rx="8" fill="#ffffff" stroke="#c0c0c0" stroke-width="1.2"/>
+  <text x="1040" y="638" font-size="14.5" font-weight="bold" font-family="Menlo, Consolas, monospace" fill="#4a4a4a">doctor</text>
+  <text x="1040" y="659" font-size="12.5" fill="#555555">check host requirements (Docker, GPU/CUDA) <tspan font-family="Menlo, Consolas, monospace">--fix</tspan></text>
+
+  <text x="1040" y="742" font-size="12" font-style="italic" fill="#777777">prefix matching: any unambiguous prefix works,</text>
+  <text x="1040" y="759" font-size="12" font-style="italic" fill="#777777">e.g. <tspan font-family="Menlo, Consolas, monospace">airfield proj up navstack</tspan></text>
+
+  <!-- ================ Footer: anatomy of an invocation ================ -->
+  <rect x="60" y="828" width="1380" height="104" rx="10" fill="#eaf1fb" stroke="#7da7d9" stroke-width="1.3" stroke-dasharray="6,4"/>
+  <text x="90" y="862" font-size="13.5" font-weight="bold" fill="#2e5fa3">Reading an invocation:</text>
+
+  <text x="330" y="866" font-size="19" font-family="Menlo, Consolas, monospace" fill="#333333">airfield</text>
+  <text x="470" y="866" font-size="19" font-weight="bold" font-family="Menlo, Consolas, monospace" fill="#8a6a15">project</text>
+  <text x="600" y="866" font-size="19" font-weight="bold" font-family="Menlo, Consolas, monospace" fill="#1f4e79">up</text>
+  <text x="660" y="866" font-size="19" font-family="Menlo, Consolas, monospace" fill="#38761d">navstack</text>
+
+  <line x1="505" y1="874" x2="505" y2="890" stroke="#8a6a15" stroke-width="1.2"/>
+  <text x="505" y="906" text-anchor="middle" font-size="12" fill="#8a6a15">namespace &#8212; the level it acts on</text>
+
+  <line x1="611" y1="874" x2="611" y2="884" stroke="#1f4e79" stroke-width="1.2"/>
+  <line x1="611" y1="884" x2="660" y2="920" stroke="#1f4e79" stroke-width="1.2"/>
+  <text x="668" y="924" font-size="12" fill="#1f4e79">command</text>
+
+  <line x1="705" y1="874" x2="705" y2="884" stroke="#38761d" stroke-width="1.2"/>
+  <line x1="705" y1="884" x2="790" y2="902" stroke="#38761d" stroke-width="1.2"/>
+  <text x="798" y="906" font-size="12" fill="#38761d">argument &#8212; here, a plan from plans/</text>
+</svg>

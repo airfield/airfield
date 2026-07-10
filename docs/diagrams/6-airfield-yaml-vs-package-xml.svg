@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1560" height="900" viewBox="0 0 1560 900" font-family="Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="9" markerHeight="8" refX="8" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="#555555"/>
+    </marker>
+    <marker id="arrowTeal" markerWidth="9" markerHeight="8" refX="8" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="#2d6f8e"/>
+    </marker>
+    <marker id="arrowBlue" markerWidth="9" markerHeight="8" refX="8" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="#2e5fa3"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1560" height="900" fill="#ffffff"/>
+
+  <!-- Title -->
+  <text x="780" y="40" text-anchor="middle" font-size="24" font-weight="bold" fill="#17607d">One airfield.yaml, many package.xml files &#8212; wrapped, never modified</text>
+  <text x="780" y="66" text-anchor="middle" font-size="14" fill="#666666">an airfield package groups several ROS 2 packages into one container; airfield's metadata lives beside the ROS code, which stays exactly as colcon expects it</text>
+
+  <!-- Legend -->
+  <rect x="1160" y="88" width="18" height="14" rx="3" fill="#ffffff" stroke="#b0b0b0" stroke-width="1.2"/>
+  <text x="1186" y="100" font-size="12.5" fill="#555555">standard ROS 2 files</text>
+  <rect x="1340" y="88" width="18" height="14" rx="3" fill="#d9eaf7" stroke="#5b9bd5" stroke-width="1.2"/>
+  <text x="1366" y="100" font-size="12.5" fill="#555555">added by airfield</text>
+
+  <!-- Consumer chips -->
+  <rect x="120" y="100" width="230" height="44" rx="10" fill="#2d5f73"/>
+  <text x="235" y="128" text-anchor="middle" font-size="15" font-weight="bold" fill="#ffffff">airfield CLI</text>
+  <text x="255" y="170" font-size="11.5" fill="#555555">reads it to build the image &amp; run containers (diagram 3)</text>
+
+  <rect x="745" y="100" width="250" height="44" rx="10" fill="#ffffff" stroke="#6aa84f" stroke-width="1.8"/>
+  <text x="870" y="128" text-anchor="middle" font-size="15" font-weight="bold" fill="#38761d">colcon (ROS build tool)</text>
+  <text x="885" y="170" font-size="11.5" fill="#555555">reads each package.xml as-is at first-run build, inside the container (diagram 3 &#183; phase 2)</text>
+
+  <!-- ================ airfield package (the wrapper) ================ -->
+  <rect x="60" y="190" width="1460" height="660" rx="12" fill="#f4f9fc" stroke="#a9c6d6" stroke-width="1.8"/>
+  <text x="85" y="222" font-size="16" font-weight="bold" font-family="Menlo, Consolas, monospace" fill="#1f4e79">packages/base_driver/</text>
+  <text x="330" y="222" font-size="12.5" fill="#666666">&#8212; ONE airfield package &#8594; ONE container image</text>
+
+  <line x1="235" y1="144" x2="235" y2="241" stroke="#555555" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <!-- ===== airfield.yaml card ===== -->
+  <rect x="90" y="245" width="470" height="440" rx="8" fill="#d9eaf7" stroke="#5b9bd5" stroke-width="1.5"/>
+  <text x="110" y="278" font-size="15" font-weight="bold" font-family="Menlo, Consolas, monospace" fill="#1f4e79">airfield.yaml</text>
+  <text x="272" y="278" font-size="11" fill="#666666">&#8212; the airfield package manifest</text>
+
+  <text x="110" y="310" font-size="12.5" font-family="Menlo, Consolas, monospace"><tspan fill="#17607d">kind: </tspan><tspan fill="#333333">package</tspan></text>
+  <text x="110" y="334" font-size="12.5" font-family="Menlo, Consolas, monospace"><tspan fill="#17607d">name: </tspan><tspan fill="#333333">base_driver</tspan></text>
+  <text x="110" y="358" font-size="12.5" font-family="Menlo, Consolas, monospace"><tspan fill="#17607d" font-weight="bold">source_path: </tspan><tspan fill="#333333">src</tspan></text>
+  <text x="330" y="358" font-size="11" font-style="italic" fill="#999999"># the ROS source tree &#8594;</text>
+  <text x="110" y="382" font-size="12.5" font-family="Menlo, Consolas, monospace"><tspan fill="#17607d">ros_distro: </tspan><tspan fill="#333333">jazzy</tspan></text>
+  <text x="110" y="406" font-size="12.5" font-family="Menlo, Consolas, monospace"><tspan fill="#17607d">base_image: </tspan><tspan fill="#333333">&#8230;</tspan></text>
+  <text x="330" y="406" font-size="11" font-style="italic" fill="#999999"># optional image override</text>
+  <text x="110" y="430" font-size="12.5" font-family="Menlo, Consolas, monospace" font-weight="bold" fill="#17607d">dependencies:</text>
+  <text x="330" y="430" font-size="11" font-style="italic" fill="#999999"># installed into the image</text>
+  <text x="136" y="454" font-size="12.5" font-family="Menlo, Consolas, monospace"><tspan fill="#17607d">- </tspan><tspan fill="#333333" font-weight="bold">rclcpp</tspan></text>
+  <text x="330" y="454" font-size="11" font-style="italic" fill="#2e5fa3"># &#8592; seeded at init</text>
+  <text x="136" y="478" font-size="12.5" font-family="Menlo, Consolas, monospace"><tspan fill="#17607d">- </tspan><tspan fill="#333333">urg_node</tspan></text>
+  <text x="110" y="502" font-size="12.5" font-family="Menlo, Consolas, monospace"><tspan fill="#17607d">colcon_args: </tspan><tspan fill="#333333">&#8230;</tspan></text>
+  <text x="330" y="502" font-size="11" font-style="italic" fill="#999999"># extra colcon build args</text>
+  <text x="110" y="526" font-size="12.5" font-family="Menlo, Consolas, monospace"><tspan fill="#17607d">devices: </tspan><tspan fill="#333333">[/dev/input]</tspan></text>
+  <text x="330" y="526" font-size="11" font-style="italic" fill="#999999"># host devices passed in</text>
+  <text x="110" y="550" font-size="12.5" font-family="Menlo, Consolas, monospace"><tspan fill="#17607d">group_add: </tspan><tspan fill="#333333">["20"]</tspan></text>
+  <text x="110" y="574" font-size="12.5" font-family="Menlo, Consolas, monospace" font-weight="bold" fill="#17607d">run:</text>
+  <text x="330" y="574" font-size="11" font-style="italic" fill="#999999"># named launch targets &#8594;</text>
+  <text x="136" y="598" font-size="12.5" font-family="Menlo, Consolas, monospace"><tspan fill="#17607d">default: </tspan><tspan fill="#38761d">ros2 run motor_driver motor_node</tspan></text>
+  <text x="136" y="622" font-size="12.5" font-family="Menlo, Consolas, monospace"><tspan fill="#17607d">joystick: </tspan><tspan fill="#38761d">ros2 run joystick joystick_node</tspan></text>
+  <text x="136" y="646" font-size="12.5" font-family="Menlo, Consolas, monospace"><tspan fill="#17607d">gui: </tspan><tspan fill="#38761d">ros2 launch gui gui.launch.py</tspan></text>
+
+  <!-- ===== src/ container ===== -->
+  <rect x="600" y="245" width="890" height="560" rx="10" fill="#fbfbfb" stroke="#c9c9c9" stroke-width="1.3"/>
+  <text x="620" y="275" font-size="15" font-weight="bold" font-family="Menlo, Consolas, monospace" fill="#444444">src/</text>
+  <text x="680" y="275" font-size="12" fill="#666666">&#8212; three ROS 2 packages,</text>
+  <text x="680" y="291" font-size="12" fill="#666666">each with its own package.xml</text>
+  <line x1="870" y1="144" x2="870" y2="296" stroke="#555555" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <!-- motor_driver (expanded) -->
+  <rect x="630" y="300" width="830" height="285" rx="8" fill="#ffffff" stroke="#b0b0b0" stroke-width="1.3"/>
+  <text x="648" y="328" font-size="14" font-weight="bold" font-family="Menlo, Consolas, monospace" fill="#333333">motor_driver/</text>
+  <text x="810" y="328" font-size="11.5" fill="#777777">&#8212; a normal ROS 2 package</text>
+
+  <rect x="648" y="345" width="420" height="210" rx="7" fill="#ffffff" stroke="#8a8a8a" stroke-width="1.4"/>
+  <text x="663" y="370" font-size="13" font-weight="bold" font-family="Menlo, Consolas, monospace" fill="#333333">package.xml</text>
+  <text x="663" y="392" font-size="11.5" font-family="Menlo, Consolas, monospace" fill="#17607d">&lt;package format="3"&gt;</text>
+  <text x="680" y="411" font-size="11.5" font-family="Menlo, Consolas, monospace"><tspan fill="#17607d">&lt;name&gt;</tspan><tspan fill="#333333" font-weight="bold">motor_driver</tspan><tspan fill="#17607d">&lt;/name&gt;</tspan></text>
+  <text x="680" y="430" font-size="11.5" font-family="Menlo, Consolas, monospace"><tspan fill="#17607d">&lt;version&gt;</tspan><tspan fill="#333333">1.2.0</tspan><tspan fill="#17607d">&lt;/version&gt;</tspan></text>
+  <text x="680" y="449" font-size="11.5" font-family="Menlo, Consolas, monospace"><tspan fill="#17607d">&lt;description&gt;</tspan><tspan fill="#333333">&#8230;</tspan><tspan fill="#17607d">&lt;/description&gt;</tspan></text>
+  <text x="680" y="468" font-size="11.5" font-family="Menlo, Consolas, monospace"><tspan fill="#17607d">&lt;maintainer&gt;</tspan><tspan fill="#333333">&#8230;</tspan><tspan fill="#17607d">&lt;/maintainer&gt;</tspan></text>
+  <text x="680" y="487" font-size="11.5" font-family="Menlo, Consolas, monospace"><tspan fill="#17607d">&lt;license&gt;</tspan><tspan fill="#333333">&#8230;</tspan><tspan fill="#17607d">&lt;/license&gt;</tspan></text>
+  <text x="680" y="506" font-size="11.5" font-family="Menlo, Consolas, monospace"><tspan fill="#17607d">&lt;buildtool_depend&gt;</tspan><tspan fill="#333333">ament_cmake</tspan><tspan fill="#17607d">&lt;/buildtool_depend&gt;</tspan></text>
+  <text x="680" y="525" font-size="11.5" font-family="Menlo, Consolas, monospace"><tspan fill="#17607d">&lt;depend&gt;</tspan><tspan fill="#333333" font-weight="bold">rclcpp</tspan><tspan fill="#17607d">&lt;/depend&gt;</tspan></text>
+  <text x="663" y="544" font-size="11.5" font-family="Menlo, Consolas, monospace" fill="#17607d">&lt;/package&gt;</text>
+
+  <text x="1090" y="375" font-size="12" font-family="Menlo, Consolas, monospace" fill="#333333">CMakeLists.txt</text>
+  <text x="1090" y="400" font-size="12" font-family="Menlo, Consolas, monospace" fill="#333333">src/motor_node.cpp</text>
+  <rect x="1090" y="425" width="220" height="26" rx="13" fill="#f5f5f5" stroke="#c8c8c8" stroke-width="1.2"/>
+  <text x="1200" y="442" text-anchor="middle" font-size="11" font-weight="bold" fill="#4a4a4a">untouched by airfield</text>
+
+  <text x="648" y="575" font-size="11" font-style="italic" fill="#2e5fa3">package init --path read these &lt;depend&gt; tags ONCE to seed the yaml's dependencies: &#8212; a convenience, not a live link</text>
+
+  <!-- joystick (compact) -->
+  <rect x="630" y="605" width="830" height="80" rx="8" fill="#ffffff" stroke="#b0b0b0" stroke-width="1.3"/>
+  <text x="648" y="631" font-size="13.5" font-weight="bold" font-family="Menlo, Consolas, monospace" fill="#333333">joystick/</text>
+  <text x="648" y="657" font-size="11.5" font-family="Menlo, Consolas, monospace" fill="#555555">package.xml &#183; CMakeLists.txt &#183; src/joystick_node.cpp</text>
+  <text x="1440" y="657" text-anchor="end" font-size="11" font-style="italic" fill="#999999">same shape &#8212; its own package.xml, untouched</text>
+
+  <!-- gui (compact) -->
+  <rect x="630" y="700" width="830" height="80" rx="8" fill="#ffffff" stroke="#b0b0b0" stroke-width="1.3"/>
+  <text x="648" y="726" font-size="13.5" font-weight="bold" font-family="Menlo, Consolas, monospace" fill="#333333">gui/</text>
+  <text x="648" y="752" font-size="11.5" font-family="Menlo, Consolas, monospace" fill="#555555">package.xml &#183; launch/gui.launch.py &#183; src/</text>
+  <text x="1440" y="752" text-anchor="end" font-size="11" font-style="italic" fill="#999999">same shape &#8212; its own package.xml, untouched</text>
+
+  <!-- ===== relationship arrows ===== -->
+  <!-- source_path -> src/ -->
+  <line x1="564" y1="353" x2="596" y2="353" stroke="#2d6f8e" stroke-width="1.6" marker-end="url(#arrowTeal)"/>
+
+  <!-- run: entries -> ROS packages -->
+  <line x1="564" y1="593" x2="626" y2="470" stroke="#2d6f8e" stroke-width="1.4" marker-end="url(#arrowTeal)"/>
+  <line x1="564" y1="617" x2="626" y2="645" stroke="#2d6f8e" stroke-width="1.4" marker-end="url(#arrowTeal)"/>
+  <line x1="564" y1="641" x2="626" y2="738" stroke="#2d6f8e" stroke-width="1.4" marker-end="url(#arrowTeal)"/>
+
+  <!-- init seeded dependencies (one-time read) -->
+  <path d="M 644 519 L 585 519 L 585 425 L 566 425" fill="none" stroke="#2e5fa3" stroke-width="1.4" stroke-dasharray="6,4" marker-end="url(#arrowBlue)"/>
+
+  <!-- bottom callout -->
+  <text x="790" y="820" text-anchor="middle" font-size="12" font-style="italic" fill="#555555">run: entries launch targets inside the wrapped ROS packages (ros2 run &lt;ros_pkg&gt; &lt;node&gt;, ros2 launch &lt;ros_pkg&gt; &lt;file&gt;);</text>
+  <text x="790" y="838" text-anchor="middle" font-size="12" font-style="italic" fill="#555555">dependencies:, devices:, base_image: shape the single container image all three share</text>
+</svg>
