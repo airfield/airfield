@@ -15,7 +15,7 @@ import typer
 import yaml
 
 from airfield.builder import Builder
-from airfield.config import AIRFIELD_CONFIG, AIRFIELD_LOCAL_CONFIG, dependencies_dir, dependency_search_paths, find_project_root, packages_dir, require_package_root, is_arm_mac, is_arm64
+from airfield.config import AIRFIELD_CONFIG, AIRFIELD_LOCAL_CONFIG, _load_yaml, dependencies_dir, dependency_search_paths, find_project_root, packages_dir, require_package_root, is_arm_mac, is_arm64
 from airfield.host_check import detect_host_facts, evaluate_host_dependencies
 from airfield.models import Dependency, Package, SUPPORTED_ROS_DISTROS
 
@@ -115,6 +115,83 @@ def _resolve_package_ros_distro(pkg: Package, project_root: Optional[Path]) -> O
     return ros_distro
 
 
+def find_shared_package_definition(
+    name: str, search_paths: List[Path]
+) -> Optional[Tuple[Path, dict]]:
+    """A shared *package definition* is a manifest in the dependency search
+    paths that explicitly declares `kind: package` (dependency manifests have
+    no kind). It lets generic, project-agnostic tool packages live once in the
+    shared packages repository instead of being vendored into every project.
+    Strict kind check only — no duck-typing on which keys happen to exist."""
+    for sp in search_paths:
+        candidate = sp / f"{name}.yaml"
+        if candidate.exists():
+            data = _load_yaml(candidate)
+            if isinstance(data, dict) and data.get("kind") == "package":
+                return candidate, data
+    return None
+
+
+def _materialize_shared_package(
+    package_name: Optional[str], root: Optional[Path], search_paths: List[Path]
+) -> Optional[Path]:
+    """Turn a shared package definition into a real packages/<name>/ directory.
+
+    Everything downstream (source mounts, .air, workdir) assumes a package
+    directory exists, so a definition is never run from the manifests folder;
+    it is materialized into the project first: clone its `source: {url, ref}`
+    if declared, otherwise scaffold an empty source dir, then write the
+    definition (minus `source`) as the package's airfield.yaml. Loud but
+    unprompted — it only creates a directory inside the project.
+    """
+    if not package_name:
+        return None
+    found = find_shared_package_definition(package_name, search_paths)
+    if found is None:
+        return None
+    manifest_path, data = found
+
+    if root is None:
+        print(f"Error: '{package_name}' is a shared package definition ({manifest_path}),")
+        print("which can only be materialized inside an Airfield project (packages/ dir needed).")
+        raise typer.Exit(1)
+
+    dest = packages_dir(root) / package_name
+    if dest.exists():
+        print(f"Error: cannot materialize shared package '{package_name}': {dest} already exists.")
+        raise typer.Exit(1)
+
+    data = dict(data)
+    source = data.pop("source", None) or {}
+    source_url = str(source.get("url", "")).strip()
+
+    print(f"Package '{package_name}' is not in this project; materializing the shared")
+    print(f"definition from {manifest_path} into {dest}")
+
+    if source_url:
+        # Sourced definition: clone becomes the package dir (wrap-style).
+        data.setdefault("source_path", ".")
+        clone_cmd = ["git", "clone"]
+        ref = str(source.get("ref", "")).strip()
+        if ref:
+            clone_cmd.extend(["--branch", ref])
+        clone_cmd.extend([source_url, str(dest)])
+        result = subprocess.run(clone_cmd, capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            shutil.rmtree(dest, ignore_errors=True)
+            details = (result.stderr or result.stdout or "unknown error").strip()
+            print(f"Error: failed to clone {source_url}: {details}")
+            raise typer.Exit(1)
+    else:
+        # Config-only definition (e.g. a containerized tool): no source.
+        data.setdefault("source_path", "src")
+        (dest / data["source_path"]).mkdir(parents=True, exist_ok=True)
+
+    (dest / AIRFIELD_CONFIG).write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    print(f"Materialized packages/{package_name}; it now behaves like any local package.")
+    return dest
+
+
 def resolve_package_context(
     package_name: Optional[str],
     target_device: str = "x86_64",
@@ -144,9 +221,13 @@ def resolve_package_context(
 
     pkg_yaml = pkg_dir / AIRFIELD_CONFIG
     if not pkg_yaml.exists():
-        raise typer.BadParameter(
-            f"Package config not found at {pkg_dir / AIRFIELD_CONFIG}"
-        )
+        materialized = _materialize_shared_package(package_name, root, search_paths)
+        if materialized is None:
+            raise typer.BadParameter(
+                f"Package config not found at {pkg_dir / AIRFIELD_CONFIG}"
+            )
+        pkg_dir = materialized
+        pkg_yaml = pkg_dir / AIRFIELD_CONFIG
 
     pkg = Package.load(pkg_yaml)
     _resolve_package_ros_distro(pkg, root)

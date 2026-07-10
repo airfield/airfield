@@ -10,6 +10,7 @@ from airfield.cli.package_exec import (
     container_workdir,
     docker_mount_args,
     entry_wrap_args,
+    find_shared_package_definition,
     gpu_runtime_args,
     in_airfield_container,
     resolve_package_context,
@@ -46,11 +47,17 @@ def run(
             if candidate.exists() and (candidate / AIRFIELD_CONFIG).exists():
                 is_valid_package = True
             else:
-                from airfield.config import find_project_root, packages_dir
+                from airfield.config import dependency_search_paths, find_project_root, packages_dir
                 root = find_project_root()
                 if root:
                     pkg_dir_candidate = packages_dir(root) / package_name
                     if pkg_dir_candidate.exists():
+                        is_valid_package = True
+                    elif find_shared_package_definition(
+                        package_name, dependency_search_paths(root, target_device)
+                    ) is not None:
+                        # Shared package definition in the packages repo; it
+                        # will be materialized by resolve_package_context.
                         is_valid_package = True
 
             if not is_valid_package:
