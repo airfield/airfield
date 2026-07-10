@@ -463,10 +463,9 @@ def docker_mount_args(pkg_dir: Path, pkg: Package, source_root: Path) -> List[st
         if not mount_path.exists():
             print(f"[WARN] Skipping mount '{mount}': path does not exist (resolved to {mount_path})")
             continue
-        if not mount_path.is_dir():
-            print(f"[WARN] Skipping mount '{mount}': not a directory (resolved to {mount_path})")
-            continue
 
+        # Files mount fine with docker -v (e.g. ~/.bash_history or a single
+        # calibration file); only nonexistent paths are skipped.
         mount_args.extend(["-v", f"{mount_path}:{mount_path}"])
         seen_mounts.add(mount_str)
 

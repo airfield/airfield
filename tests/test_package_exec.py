@@ -291,3 +291,21 @@ class TestGpuRuntimeArgs:
         args = package_exec.gpu_runtime_args()
         assert "--gpus" in args
         assert "NVIDIA_DRIVER_CAPABILITIES=compute,utility" in args
+
+
+def test_configured_file_mounts_are_allowed(temp_workspace):
+    """.air `mounts:` entries that are files (e.g. ~/.bash_history) mount
+    fine with docker -v; only nonexistent paths are skipped."""
+    from airfield.cli.package_exec import docker_mount_args
+
+    pkg_dir = temp_workspace / "pkg"
+    pkg_dir.mkdir()
+    file_mount = temp_workspace / "history.txt"
+    file_mount.write_text("x", encoding="utf-8")
+    missing = temp_workspace / "does_not_exist"
+    (pkg_dir / ".air").write_text(f"mounts:\n  - {file_mount}\n  - {missing}\n", encoding="utf-8")
+
+    args = docker_mount_args(pkg_dir, Package(name="p"), pkg_dir)
+    joined = " ".join(args)
+    assert f"{file_mount}:{file_mount}" in joined
+    assert str(missing) not in joined
