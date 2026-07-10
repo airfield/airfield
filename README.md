@@ -312,28 +312,44 @@ Host dependency policy for accelerated packages:
 
 ### Shared package definitions
 
-Generic, project-agnostic packages (containerized tools like a foxglove
-bridge or a VNC server) can live once in the packages repository instead of
-being copied into every project: a manifest with an explicit `kind: package`
-is a *shared package definition*.
+The packages repository can also hold whole packages that projects **use as
+tools but do not develop** — an AprilTag detector, a foxglove bridge, a VNC
+server. The dividing line is *who edits the code*, not whether the package has
+source:
+
+- **You're developing it** → it belongs in your project (`packages/<name>/`,
+  tracked like any subproject). Editing a package by pushing to GitHub and
+  re-pulling it through the shared repository makes no sense.
+- **You only run it** → publish a *shared package definition* once and let
+  every project pull it in on demand.
+
+A shared package definition is a manifest with an explicit `kind: package`:
 
 ```yaml
 kind: package
-name: my_shared_tool
+name: apriltag_detector
 ros_distro: jazzy
 dependencies: [...]
 run:
-  default: ros2 launch my_shared_tool bringup.launch.py
+  default: ros2 launch apriltag_detector detector.launch.py
 source_path: .
-source:            # optional: where the source code lives
-  url: https://github.com/example/my_shared_tool.git
-  ref: main
+source:            # optional: upstream source to clone, pinned to a ref
+  url: https://github.com/example/apriltag_detector.git
+  ref: v3.2.0
 ```
 
-Referencing such a package from a project (`airfield package run my_shared_tool`)
-materializes it into `packages/my_shared_tool/` — cloning `source` if declared,
-otherwise scaffolding an empty `src/` — after which it behaves like any local
-package. Plain dependency manifests (no `kind`) are never treated as packages.
+Referencing such a package from a project (`airfield package run
+apriltag_detector`) materializes it into `packages/apriltag_detector/` —
+cloning `source` at the pinned `ref` if declared, otherwise scaffolding an
+empty `src/` — after which it behaves like any local package. The materialized
+directory is added to the project's `.gitignore`: it is reproducible from the
+definition (delete the directory to refresh it), so it is never committed to
+the project, and a fresh checkout re-materializes it automatically on first
+use. Plain dependency manifests (no `kind`) are never treated as packages.
+
+If you find yourself editing a materialized package, promote it: delete the
+gitignore entry and track the directory in your project (or as a subproject)
+like any other package you develop.
 
 Local-only runtime options should go in `.air` (gitignored), not `airfield.yaml`.
 

@@ -120,8 +120,11 @@ def find_shared_package_definition(
 ) -> Optional[Tuple[Path, dict]]:
     """A shared *package definition* is a manifest in the dependency search
     paths that explicitly declares `kind: package` (dependency manifests have
-    no kind). It lets generic, project-agnostic tool packages live once in the
-    shared packages repository instead of being vendored into every project.
+    no kind). It is for packages a project USES as-is but does not develop —
+    e.g. an AprilTag detector or a foxglove bridge — so they can live once in
+    the shared packages repository instead of being vendored into every
+    project. Packages under active development belong in the project itself;
+    they should never round-trip through the shared repo to be edited.
     Strict kind check only — no duck-typing on which keys happen to exist."""
     for sp in search_paths:
         candidate = sp / f"{name}.yaml"
@@ -143,6 +146,11 @@ def _materialize_shared_package(
     if declared, otherwise scaffold an empty source dir, then write the
     definition (minus `source`) as the package's airfield.yaml. Loud but
     unprompted — it only creates a directory inside the project.
+
+    Because these are use-only tools (not packages the project develops), the
+    materialized directory is gitignored: it is reproducible from the shared
+    definition — delete it to re-materialize/update — and a fresh checkout of
+    the project regains it automatically on first use.
     """
     if not package_name:
         return None
@@ -188,7 +196,13 @@ def _materialize_shared_package(
         (dest / data["source_path"]).mkdir(parents=True, exist_ok=True)
 
     (dest / AIRFIELD_CONFIG).write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+
+    from airfield.cli.proj_init import _ensure_gitignore_entry
+
+    _ensure_gitignore_entry(root, f"packages/{package_name}/")
     print(f"Materialized packages/{package_name}; it now behaves like any local package.")
+    print(f"Added packages/{package_name}/ to the project .gitignore (use-only tool,")
+    print("reproducible from the shared definition — delete the directory to refresh it).")
     return dest
 
 

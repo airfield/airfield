@@ -1,7 +1,9 @@
-"""Shared package definitions: manifests with `kind: package` in the
-dependency search paths are materialized into <project>/packages/<name>/
+"""Shared package definitions: packages a project USES as-is but does not
+develop (tools like an AprilTag detector). Manifests with `kind: package` in
+the dependency search paths are materialized into <project>/packages/<name>/
 before use (redesign of Nathan's run-from-repo-manifest feature — a
-definition is never executed out of the manifests folder)."""
+definition is never executed out of the manifests folder) and gitignored,
+since they are reproducible from the definition."""
 import subprocess
 from pathlib import Path
 
@@ -46,6 +48,9 @@ def test_config_only_shared_package_materializes(cli_runner, temp_workspace, moc
     assert pkg.run == {"default": "echo hi"}
     data = yaml.safe_load((materialized / "airfield.yaml").read_text(encoding="utf-8"))
     assert "source" not in data
+    # Use-only tool: never committed to the project repo.
+    gitignore = (temp_workspace / ".gitignore").read_text(encoding="utf-8")
+    assert "packages/shared_tool/" in gitignore.splitlines()
 
 
 def test_sourced_shared_package_clones(cli_runner, temp_workspace, mocker):
@@ -73,6 +78,8 @@ def test_sourced_shared_package_clones(cli_runner, temp_workspace, mocker):
     assert (materialized / "node.py").exists()          # cloned source
     assert (materialized / "airfield.yaml").exists()    # definition written into clone
     assert pkg.source_path == "."
+    gitignore = (temp_workspace / ".gitignore").read_text(encoding="utf-8")
+    assert "packages/shared_src_pkg/" in gitignore.splitlines()
 
 
 def test_shared_definition_requires_project(temp_workspace, mocker, capsys):
