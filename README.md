@@ -370,7 +370,13 @@ pipx install --force --editable ".[test]"
 To run the test suite in an isolated environment using your local source:
 
 ```bash
-pipx run --no-cache --editable --spec ".[test]" python3 -m pytest
+PIPX_DEFAULT_BACKEND=pip pipx run --no-cache --editable --spec ".[test]" python3 -m pytest --cov=src/airfield
+```
+
+Alternatively, if you are using `uv`:
+
+```bash
+uv run --no-env-file --extra test pytest --cov=src/airfield
 ```
 
 ### Release Tagging and Hooks
