@@ -190,6 +190,8 @@ def resolve_package_context(
                 if root is not None:
                     print(f"  - {packages_dir(root)} (peer packages)")
                 print(f"Each dependency listed in airfield.yaml must have a corresponding .yaml manifest.")
+                print("If this manifest was upstreamed recently, refresh your copy of the shared")
+                print("repository with: airfield package dependencies pull")
                 raise typer.Exit(1)
 
     return pkg_dir, pkg, deps, source_root

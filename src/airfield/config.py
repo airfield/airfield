@@ -107,6 +107,28 @@ def packages_repo_root() -> Path:
     return _cached_packages_root()
 
 
+def pull_packages_repo() -> Path:
+    """git pull the shared packages checkout (sibling checkout or cache clone).
+
+    --ff-only and no URL fallback: a bare-URL `git pull` would merge the
+    remote's default branch into whatever branch the checkout is on — exactly
+    wrong for forks doing manifest work on a branch. Surface git's error and
+    let the user resolve their checkout instead.
+    """
+    repo = packages_repo_root()
+    if (repo / ".git").exists():
+        result = subprocess.run(
+            ["git", "-C", str(repo), "pull", "--ff-only"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            details = (result.stderr or result.stdout or "unknown error").strip()
+            raise RuntimeError(f"Failed to pull packages repository at {repo}: {details}")
+    return repo
+
+
 def _load_yaml(path: Path):
     try:
         with open(path, "r", encoding="utf-8") as f:

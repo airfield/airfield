@@ -14,6 +14,7 @@ from airfield.main import app
         ["project", "up"],
         ["package", "dependencies", "check"],
         ["package", "dependencies", "upstream"],
+        ["package", "dependencies", "pull"],
         ["project", "init"],
         ["project", "deinit"],
         ["project", "run"],

@@ -99,3 +99,16 @@ def upstream(
 
     typer.echo(f"Copied {len(local_files)} dependency manifest(s) into {repo_root}")
     typer.echo("Next: create a feature branch, commit, push, and open a pull request in the packages repository.")
+
+
+def pull():
+    """Pull the latest dependency manifests from the shared packages repository."""
+    from airfield.config import pull_packages_repo
+
+    typer.echo("Pulling latest manifests from the shared packages repository...")
+    try:
+        repo = pull_packages_repo()
+    except Exception as exc:
+        typer.echo(f"Error updating packages repository: {exc}")
+        raise typer.Exit(1)
+    typer.echo(f"Packages repository up to date at {repo}")
