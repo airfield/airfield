@@ -145,6 +145,34 @@ def _check_docker() -> Tuple[str, str, Optional[str]]:
     return "pass", "Docker", f"available at {docker_path}"
 
 
+def _check_git() -> Tuple[str, str, Optional[str]]:
+    git_path = shutil.which("git")
+    if git_path is None:
+        return "fail", "Git", (
+            "git not found in PATH. Airfield needs it to fetch the shared packages "
+            "repository and manage subproject checkouts. Install: apt-get install git"
+        )
+    return "pass", "Git", f"available at {git_path}"
+
+
+def _check_plan_runner() -> Tuple[str, str, Optional[str]]:
+    """tmux + tmuxinator are only needed for `project up` plan launches, so
+    missing tools warn (with install hints) rather than fail."""
+    tmux_path = shutil.which("tmux")
+    tmuxinator_path = shutil.which("tmuxinator")
+    if tmux_path and tmuxinator_path:
+        return "pass", "Plan runner", f"tmux at {tmux_path}; tmuxinator at {tmuxinator_path}"
+
+    missing = []
+    if tmux_path is None:
+        missing.append("tmux (install: apt-get install tmux)")
+    if tmuxinator_path is None:
+        missing.append("tmuxinator (install: apt-get install tmuxinator, or gem install tmuxinator)")
+    return "warn", "Plan runner", (
+        f"`airfield project up` will not work until installed: {'; '.join(missing)}"
+    )
+
+
 def _detect_cuda_version() -> Optional[str]:
     nvcc = shutil.which("nvcc")
     if nvcc is None:
@@ -483,6 +511,9 @@ def run(
         results.append(_check_container(auto_fix=fix))
     else:
         results.append(_check_docker())
+    results.append(_check_git())
+    if not _inside_container():
+        results.append(_check_plan_runner())
     results.append(_check_shell_completion(auto_fix=fix))
     results.append(_check_gpu_accelerator())
     # Only probe PyTorch when running inside a container environment where

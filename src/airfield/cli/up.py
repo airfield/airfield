@@ -40,6 +40,11 @@ def run(
 
     plan = Plan.load(plan_yaml)
 
+    if not plan.windows and not plan.packages:
+        print(f"Error: Plan '{plan.name}' defines no windows (and no packages).")
+        print(f"Add a 'windows:' section to {plan_yaml} — see plans/example.yaml for the format.")
+        raise typer.Exit(1)
+
     env = Environment(
         loader=PackageLoader("airfield", "templates"),
         autoescape=select_autoescape(),
@@ -64,6 +69,12 @@ def run(
 
     if launch:
         cmd = ["tmuxinator", "start", "-p", str(output_path)]
-        result = subprocess.run(cmd)
+        try:
+            result = subprocess.run(cmd)
+        except FileNotFoundError:
+            print("Error: tmuxinator not found. Plans launch as tmux sessions via tmuxinator.")
+            print("Install it (apt-get install tmuxinator, or gem install tmuxinator) and retry,")
+            print("or use --no-launch to only generate the config.")
+            raise typer.Exit(1)
         if result.returncode != 0:
             raise typer.Exit(result.returncode)

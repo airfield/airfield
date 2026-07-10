@@ -3,6 +3,7 @@ import pwd
 import shutil
 import subprocess
 import tempfile
+from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -130,6 +131,87 @@ class Builder:
                 return repo_root
         return None
 
+    def _airfield_runtime_requirements(self) -> List[str]:
+        """Runtime requirements of the installed airfield distribution.
+
+        Read from installed metadata so the synthesized project matches whatever
+        this CLI was installed with; extras (test-only deps) are filtered out.
+        """
+        fallback = [
+            "typer>=0.9.0",
+            "jinja2>=3.1.0",
+            "rich>=13.0.0",
+            "questionary>=2.0.0",
+            "pydantic>=2.0.0",
+            "pyyaml>=6.0",
+        ]
+        try:
+            reqs = importlib_metadata.requires("airfield") or []
+        except Exception:
+            return fallback
+        runtime = [r for r in reqs if "extra ==" not in r]
+        return runtime or fallback
+
+    def _stage_airfield_source(self, context_dir: Path, build_root: Path) -> None:
+        """Stage the running airfield CLI into the build context at build_root/airfield.
+
+        The image must run THIS airfield, never `pip install airfield` from PyPI:
+        the PyPI name is owned by an unrelated project ("AirField", a pydantic
+        forms library), so a registry install puts wrong third-party code in
+        every image. When a source checkout is visible (developer install) copy
+        it; otherwise reconstruct an installable project from the imported
+        package so pipx/venv installs work identically.
+        """
+        airfield_repo = self._find_airfield_repo(context_dir)
+        if airfield_repo is not None:
+            shutil.copytree(
+                airfield_repo,
+                build_root / "airfield",
+                ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc", "build", "dist", "*.egg-info"),
+            )
+            return
+
+        import airfield as airfield_pkg
+
+        pkg_src = Path(airfield_pkg.__file__).resolve().parent
+        dest_root = build_root / "airfield"
+        shutil.copytree(
+            pkg_src,
+            dest_root / "src" / "airfield",
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+        )
+
+        version = getattr(airfield_pkg, "__version__", "0.0.0")
+        requirements = ",\n    ".join(f'"{req}"' for req in self._airfield_runtime_requirements())
+        (dest_root / "pyproject.toml").write_text(
+            f"""[build-system]
+requires = ["setuptools>=64.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "airfield"
+version = "{version}"
+description = "The framework for reproducible robots."
+requires-python = ">=3.10"
+dependencies = [
+    {requirements}
+]
+
+[project.scripts]
+airfield = "airfield.main:app"
+
+[tool.setuptools]
+package-dir = {{"" = "src"}}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+airfield = ["templates/docker/*.j2", "templates/tmux/*.j2"]
+""",
+            encoding="utf-8",
+        )
+
     def _supports_cache_mounts(self) -> bool:
         if is_arm_mac():
             return True
@@ -187,7 +269,7 @@ class Builder:
             command += " && rm -rf /var/lib/apt/lists/*"
         return command
 
-    def generate_dockerfile(self, install_local_airfield: bool = False, cache_mounts_enabled: bool = True) -> str:
+    def generate_dockerfile(self, cache_mounts_enabled: bool = True) -> str:
         lines = []
         default_uid = os.getuid()
         default_gid = os.getgid()
@@ -208,8 +290,11 @@ class Builder:
         if is_arm_mac():
             lines.append("RUN echo 'Acquire::ForceIPv4 \"true\";' > /etc/apt/apt.conf.d/99force-ipv4")
         
-        # Optimized apt-get with BuildKit cache mounts
-        base_packages = ["python3-pip", "python3-opencv", "git", "zsh"]
+        # Optimized apt-get with BuildKit cache mounts.
+        # Keep this minimal: anything beyond pip/git belongs in dependency
+        # manifests so packages only pay for what they declare (python3-opencv
+        # alone used to drag Qt/GStreamer into every image).
+        base_packages = ["python3-pip", "git"]
         if self.ros_distro:
             base_packages.extend(ROS_CORE_PACKAGES[self.ros_distro])
         apt_install = self._apt_install_command(base_packages, cache_mounts_enabled=cache_mounts_enabled)
@@ -237,31 +322,21 @@ class Builder:
                 "python3 -m pip install --upgrade pip || true"
             )
 
-        if install_local_airfield:
-            lines.append("COPY airfield /opt/airfield")
-            if cache_mounts_enabled:
-                lines.append(
-                    "RUN --mount=type=cache,target=/root/.cache/pip \\\n"
-                    "    python3 -m pip install /opt/airfield || \\\n"
-                    "    python3 -m pip install --break-system-packages /opt/airfield"
-                )
-            else:
-                lines.append(
-                    "RUN python3 -m pip install --no-cache-dir /opt/airfield || "
-                    "python3 -m pip install --no-cache-dir --break-system-packages /opt/airfield"
-                )
+        # Install the airfield CLI staged into the build context by
+        # _stage_airfield_source. Never install "airfield" from PyPI: that name
+        # belongs to an unrelated third-party project.
+        lines.append("COPY airfield /opt/airfield")
+        if cache_mounts_enabled:
+            lines.append(
+                "RUN --mount=type=cache,target=/root/.cache/pip \\\n"
+                "    python3 -m pip install /opt/airfield || \\\n"
+                "    python3 -m pip install --break-system-packages /opt/airfield"
+            )
         else:
-            if cache_mounts_enabled:
-                lines.append(
-                    "RUN --mount=type=cache,target=/root/.cache/pip \\\n"
-                    "    python3 -m pip install airfield || \\\n"
-                    "    python3 -m pip install --break-system-packages airfield"
-                )
-            else:
-                lines.append(
-                    "RUN python3 -m pip install --no-cache-dir airfield || "
-                    "python3 -m pip install --no-cache-dir --break-system-packages airfield"
-                )
+            lines.append(
+                "RUN python3 -m pip install --no-cache-dir /opt/airfield || "
+                "python3 -m pip install --no-cache-dir --break-system-packages /opt/airfield"
+            )
 
         system_cmds = []
         for dep in self.dependencies:
@@ -294,13 +369,7 @@ class Builder:
             "useradd --uid $UID --gid $GID -m $USERNAME; "
             "fi"
         )
-        lines.append("RUN usermod -s /bin/zsh $USERNAME")
         lines.append("RUN git config --system --add safe.directory '*'")
-        lines.append(
-            "RUN git clone --depth=1 https://github.com/ohmyzsh/ohmyzsh.git /home/$USERNAME/.oh-my-zsh && "
-            "cp /home/$USERNAME/.oh-my-zsh/templates/zshrc.zsh-template /home/$USERNAME/.zshrc && "
-            "chown -R $UID:$GID /home/$USERNAME/.oh-my-zsh /home/$USERNAME/.zshrc"
-        )
         lines.append("RUN mkdir -p /home/$USERNAME/workspace/src && chown -R $UID:$GID /home/$USERNAME")
         if self.ros_distro:
             lines.append(
@@ -309,13 +378,6 @@ class Builder:
                 "printf '%s\\n' 'colcon_build() { mkdir -p log && colcon build \"$@\"; }' >> /home/$USERNAME/.bashrc && "
                 "printf '%s\\n' 'source /opt/ros/$ROS_DISTRO/setup.bash' >> /home/$USERNAME/.profile && "
                 "printf '%s\\n' 'if [ -f $HOME/workspace/install/setup.bash ]; then source $HOME/workspace/install/setup.bash; fi' >> /home/$USERNAME/.profile"
-            )
-            lines.append(
-                "RUN printf '%s\\n' 'source /opt/ros/$ROS_DISTRO/setup.zsh' >> /home/$USERNAME/.zshrc && "
-                "printf '%s\\n' 'if [ -f $HOME/workspace/install/setup.zsh ]; then source $HOME/workspace/install/setup.zsh; fi' >> /home/$USERNAME/.zshrc && "
-                "printf '%s\\n' 'colcon_build() { mkdir -p log && colcon build \"$@\"; }' >> /home/$USERNAME/.zshrc && "
-                "printf '%s\\n' 'source /opt/ros/$ROS_DISTRO/setup.zsh' >> /home/$USERNAME/.zprofile && "
-                "printf '%s\\n' 'if [ -f $HOME/workspace/install/setup.zsh ]; then source $HOME/workspace/install/setup.zsh; fi' >> /home/$USERNAME/.zprofile"
             )
             # Build-if-needed command wrapper used by `package cmd`/`package run`.
             lines.append("COPY airfield-entry.sh /opt/airfield-entry.sh")
@@ -350,13 +412,7 @@ class Builder:
         with tempfile.TemporaryDirectory() as td:
             build_root = Path(td)
             cache_mounts_enabled = self._supports_cache_mounts()
-            airfield_repo = self._find_airfield_repo(context_dir)
-            if airfield_repo is not None:
-                shutil.copytree(
-                    airfield_repo,
-                    build_root / "airfield",
-                    ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc", "build", "dist", "*.egg-info"),
-                )
+            self._stage_airfield_source(context_dir, build_root)
 
             # Always present in the build context; only COPY'd into ROS images
             # (see generate_dockerfile's ros_distro block).
@@ -371,7 +427,6 @@ class Builder:
                 print("[WARN] Command: airfield package dependencies upstream .")
 
             dockerfile_content = self.generate_dockerfile(
-                install_local_airfield=airfield_repo is not None,
                 cache_mounts_enabled=cache_mounts_enabled,
             )
             df_path = build_root / "Dockerfile"
@@ -435,6 +490,23 @@ class Builder:
             else:
                 env.pop("DOCKER_BUILDKIT", None)
 
+            # Surface every env-driven toggle that changed this build, so
+            # behavior differences between machines are visible instead of
+            # silently coming from someone's shell profile.
+            toggles = [
+                f"engine={'container' if is_arm_mac() else 'docker'}",
+                f"platform={self._resolve_docker_platform() or self.target_device}",
+                f"base_image={self.base_image}",
+                f"cache_mounts={'on' if cache_mounts_enabled else 'off'}",
+            ]
+            if not is_arm_mac():
+                toggles.append("pull=skipped (AIRFIELD_NO_PULL set)" if no_pull else "pull=always")
+            for docker_arg, preferred_host_env in torch_build_args:
+                for env_name in (preferred_host_env, docker_arg):
+                    if os.environ.get(env_name):
+                        toggles.append(f"{docker_arg}={os.environ[env_name]} (from ${env_name})")
+                        break
+            print(f"[airfield] build settings: {'  '.join(toggles)}")
             print(f"Executing: {' '.join(cmd)}")
             print("--- Dockerfile ---")
             print(dockerfile_content)
@@ -458,7 +530,6 @@ class Builder:
                 if "invalid mount type \"cache\"" in stderr_text or "invalid mount type \"cache\"" in stdout_text:
                     print("Build engine rejected cache mounts. Retrying in compatibility mode...")
                     dockerfile_content = self.generate_dockerfile(
-                        install_local_airfield=airfield_repo is not None,
                         cache_mounts_enabled=False,
                     )
                     df_path.write_text(dockerfile_content, encoding="utf-8")

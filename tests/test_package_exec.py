@@ -74,7 +74,7 @@ def test_project_run(cli_runner, mock_package_context, mock_docker):
     
     assert result.exit_code == 0
     called_args = mock_docker.call_args[0][0]
-    assert called_args[-1] == "/bin/bash"
+    assert called_args[-2:] == ["/bin/bash", "-l"]
     assert "No 'default' run command defined" in result.output
 
 def test_project_run_with_default_command(cli_runner, mock_package_context, mock_docker):

@@ -52,14 +52,14 @@ def test_entry_script_is_valid_bash_and_has_guards(tmp_path):
 
 def test_dockerfile_copies_entry_script_for_ros_packages():
     builder = Builder(Package(name="p", ros_distro="jazzy"), [], "arm64")
-    df = builder.generate_dockerfile(install_local_airfield=False, cache_mounts_enabled=False)
+    df = builder.generate_dockerfile(cache_mounts_enabled=False)
     assert "COPY airfield-entry.sh /opt/airfield-entry.sh" in df
     assert "chmod 755 /opt/airfield-entry.sh" in df
 
 
 def test_dockerfile_omits_entry_script_for_non_ros_packages():
     builder = Builder(Package(name="p"), [], "arm64")
-    df = builder.generate_dockerfile(install_local_airfield=False, cache_mounts_enabled=False)
+    df = builder.generate_dockerfile(cache_mounts_enabled=False)
     assert "airfield-entry.sh" not in df
 
 

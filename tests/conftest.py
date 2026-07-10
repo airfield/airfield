@@ -32,4 +32,5 @@ def mock_docker(mocker):
 
     mocker.patch("airfield.cli.pkg_cmd.run_container_foreground", side_effect=_foreground)
     mocker.patch("airfield.cli.pkg_run.run_container_foreground", side_effect=_foreground)
+    mocker.patch("airfield.cli.run.run_container_foreground", side_effect=_foreground)
     return run_mock

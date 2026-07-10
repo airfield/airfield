@@ -71,17 +71,24 @@ def run(
 
 
 # Update check implementation
-_CACHE_PATH = Path(os.path.expanduser("~")) / ".cache" / "airfield"
-_CACHE_FILE = _CACHE_PATH / "last_update_check.json"
 _GITHUB_REPO = "airfield/airfield"
 _TAGS_API = f"https://api.github.com/repos/{_GITHUB_REPO}/tags"
 
 
+def _cache_file() -> Path:
+    # Route through the shared XDG helper so this honors XDG_CACHE_HOME like
+    # every other airfield cache path.
+    from airfield.config import xdg_cache_root
+
+    return xdg_cache_root() / "last_update_check.json"
+
+
 def _read_cache() -> Optional[dict]:
     try:
-        if not _CACHE_FILE.exists():
+        cache_file = _cache_file()
+        if not cache_file.exists():
             return None
-        text = _CACHE_FILE.read_text(encoding="utf-8")
+        text = cache_file.read_text(encoding="utf-8")
         return json.loads(text)
     except Exception:
         return None
@@ -89,8 +96,7 @@ def _read_cache() -> Optional[dict]:
 
 def _write_cache(obj: dict) -> None:
     try:
-        _CACHE_PATH.mkdir(parents=True, exist_ok=True)
-        _CACHE_FILE.write_text(json.dumps(obj), encoding="utf-8")
+        _cache_file().write_text(json.dumps(obj), encoding="utf-8")
     except Exception:
         pass
 

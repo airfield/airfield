@@ -4,6 +4,15 @@ Full Documentation: [airfield.io](https://airfield.io)
 
 Airfield is a package-centric robotics framework for structuring projects, declaring dependencies, and running reproducible package containers.
 
+## Prerequisites
+
+- Linux, or an Apple Silicon Mac (uses Apple's `container` tool). Native Windows is not supported.
+- [Docker](https://docs.docker.com/engine/install/) with daemon access for your user (`docker info` should work without sudo)
+- `git`
+- `tmux` and [`tmuxinator`](https://github.com/tmuxinator/tmuxinator) — only needed for `airfield project up` plan launches (`apt-get install tmux tmuxinator`)
+
+Check your setup any time with `airfield doctor`.
+
 ## Install
 
 [Install pipx](https://pipx.pypa.io/stable/how-to/install-pipx/)
@@ -82,11 +91,14 @@ This creates:
 ```text
 my_robot/
 	airfield.yaml
+	.gitignore
+	.dockerignore
 	packages/
 	dependencies/
 		x86_64/
 		arm64/
 	plans/
+		example.yaml
 ```
 
 `airfield.yaml` is the project marker used by all `package` and `project` commands.
@@ -196,17 +208,21 @@ airfield package cmd . -- ros2 pkg list
 
 ### 6. Run a plan
 
-```bash
-airfield project liftoff example
-```
-
-### 7. Generate tmuxinator session from a plan
+Plans (`plans/*.yaml`) describe tmux sessions: windows and panes, where each pane
+can run a command inside a package's container. `project init` scaffolds
+`plans/example.yaml` showing the format.
 
 ```bash
-airfield package up example --output .airfield/example.tmuxinator.yml
+airfield project up example
 ```
 
-Add `--launch` to start tmuxinator immediately.
+This compiles the plan to a tmuxinator config and launches it (requires tmux +
+tmuxinator). Useful flags: `--no-launch` (only generate the config),
+`--inspect` (print it to stdout), `--output <path>`.
+
+There is also `airfield project liftoff <plan>`, which reads a plan's
+`packages:` list and runs each package's `default` command *sequentially,
+blocking until each exits*. Prefer `project up` for launching robot stacks.
 
 ### 8. Remove Airfield config from a package or project
 
@@ -317,10 +333,26 @@ packages:
 	- perception
 ```
 
+## Image contents and environment toggles
+
+Generated images are intentionally minimal: the base image plus `python3-pip`,
+`git`, the ROS build tool for the selected distro, and the airfield CLI itself
+(installed from your running copy, never from PyPI). Everything else — OpenCV,
+GUI libraries, extra shells — must be declared as dependencies so each package
+only pays for what it uses.
+
+Environment variables that change build/run behavior (each build prints the
+effective settings in an `[airfield] build settings:` line):
+
+- `AIRFIELD_NO_PULL=1` — don't `--pull` the base image; required when `base_image` is a locally-built image that exists in no registry
+- `AIRFIELD_FORCE_DOCKER_CACHE_MOUNTS=1` / `AIRFIELD_DISABLE_DOCKER_CACHE_MOUNTS=1` — override BuildKit cache-mount detection
+- `AIRFIELD_TORCH_INSTALL_TARGET` (or `TORCH_INSTALL_TARGET`), `AIRFIELD_TORCH_VERSION`, `AIRFIELD_TORCH_GPU_WHL_TAG` — PyTorch build args; `gpu` also enables GPU passthrough at run time on non-Jetson hosts (Jetson hosts always get GPU/camera passthrough)
+- `MAKEFLAGS` / `CMAKE_BUILD_PARALLEL_LEVEL` — override the parallelism of the automatic in-container `colcon build` run by `package cmd`/`package run`
+
 ## Notes
 
 - Run commands from inside an Airfield project or one of its subdirectories.
-- `airfield project run` currently runs the selected package's `default` command when present, otherwise it starts an interactive container shell.
+- `airfield project run` currently runs the selected package's `default` command when present, otherwise it starts an interactive container shell. `airfield project run --test` runs the package's `test` command and fails if none is defined.
 
 
 ## Development
