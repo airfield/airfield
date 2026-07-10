@@ -310,6 +310,31 @@ Host dependency policy for accelerated packages:
 - in non-interactive mode, Airfield auto-selects safe defaults (for example CPU install path)
 - CUDA runtime/toolkit dependencies can be declared as normal dependencies and installed inside the container
 
+### Shared package definitions
+
+Generic, project-agnostic packages (containerized tools like a foxglove
+bridge or a VNC server) can live once in the packages repository instead of
+being copied into every project: a manifest with an explicit `kind: package`
+is a *shared package definition*.
+
+```yaml
+kind: package
+name: my_shared_tool
+ros_distro: jazzy
+dependencies: [...]
+run:
+  default: ros2 launch my_shared_tool bringup.launch.py
+source_path: .
+source:            # optional: where the source code lives
+  url: https://github.com/example/my_shared_tool.git
+  ref: main
+```
+
+Referencing such a package from a project (`airfield package run my_shared_tool`)
+materializes it into `packages/my_shared_tool/` — cloning `source` if declared,
+otherwise scaffolding an empty `src/` — after which it behaves like any local
+package. Plain dependency manifests (no `kind`) are never treated as packages.
+
 Local-only runtime options should go in `.air` (gitignored), not `airfield.yaml`.
 
 Example package `.air`:
