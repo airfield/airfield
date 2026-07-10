@@ -345,6 +345,8 @@ Environment variables that change build/run behavior (each build prints the
 effective settings in an `[airfield] build settings:` line):
 
 - `AIRFIELD_NO_PULL=1` — don't `--pull` the base image; required when `base_image` is a locally-built image that exists in no registry
+- `AIRFIELD_PACKAGES_REPO` — git URL of the shared dependency-manifest repository (default `https://github.com/airfield/packages.git`); set for forks, mirrors, or air-gapped sites
+- `AIRFIELD_REPO` — GitHub `owner/name` slug used for update checks (default `airfield/airfield`)
 - `AIRFIELD_FORCE_DOCKER_CACHE_MOUNTS=1` / `AIRFIELD_DISABLE_DOCKER_CACHE_MOUNTS=1` — override BuildKit cache-mount detection
 - `AIRFIELD_TORCH_INSTALL_TARGET` (or `TORCH_INSTALL_TARGET`), `AIRFIELD_TORCH_VERSION`, `AIRFIELD_TORCH_GPU_WHL_TAG` — PyTorch build args; `gpu` also enables GPU passthrough at run time on non-Jetson hosts (Jetson hosts always get GPU/camera passthrough)
 - `MAKEFLAGS` / `CMAKE_BUILD_PARALLEL_LEVEL` — override the parallelism of the automatic in-container `colcon build` run by `package cmd`/`package run`

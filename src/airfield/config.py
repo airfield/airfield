@@ -9,7 +9,11 @@ import yaml
 
 AIRFIELD_CONFIG = "airfield.yaml"
 AIRFIELD_LOCAL_CONFIG = ".air"
-PACKAGES_GITHUB_REPO = "https://github.com/airfield/packages.git"
+# Overridable so forks, mirrors, and air-gapped sites can point at their own
+# packages repository.
+PACKAGES_GITHUB_REPO = os.environ.get(
+    "AIRFIELD_PACKAGES_REPO", "https://github.com/airfield/packages.git"
+)
 
 
 def is_arm_mac() -> bool:

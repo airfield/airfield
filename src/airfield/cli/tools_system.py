@@ -71,7 +71,8 @@ def run(
 
 
 # Update check implementation
-_GITHUB_REPO = "airfield/airfield"
+# owner/name slug, overridable for forks/mirrors (also used by system update).
+_GITHUB_REPO = os.environ.get("AIRFIELD_REPO", "airfield/airfield")
 _TAGS_API = f"https://api.github.com/repos/{_GITHUB_REPO}/tags"
 
 

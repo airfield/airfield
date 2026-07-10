@@ -92,7 +92,6 @@ def _print_project_status(project_root: Path) -> None:
     console.print(f"kind: {project.get('kind', 'project')}")
     console.print(f"version: {project.get('version', 'unknown')}")
     console.print(f"ros_distro: {project.get('ros_distro', 'unknown')}")
-    console.print(f"default_target_device: {project.get('default_target_device', 'x86_64')}")
 
     project_packages = project_root / "packages"
     package_count = 0
@@ -203,16 +202,11 @@ def run(
         console.print(f"[yellow]No Airfield project or package found at {start}.[/yellow]")
         raise typer.Exit(1)
 
+    # Same rule as every build/run command: host arch unless --target-device
+    # is passed explicitly.
     resolved_target = target_device
     if resolved_target is None:
         resolved_target = "arm64" if is_arm64() else "x86_64"
-        if project_root is not None:
-            project_manifest = _project_manifest_path(project_root)
-            if project_manifest is not None:
-                project_data = _load_yaml(project_manifest)
-                default_target = project_data.get("default_target_device")
-                if isinstance(default_target, str) and default_target.strip():
-                    resolved_target = default_target.strip()
 
     if project_root is not None:
         _print_project_status(project_root)
