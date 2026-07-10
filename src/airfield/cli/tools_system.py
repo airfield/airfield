@@ -211,23 +211,65 @@ def check_for_update(force: bool = False, timeout: int = 5) -> Optional[dict]:
     return result
 
 
-def update(force: bool = typer.Option(False, "--force", help="Ignore cache and force network check")):
-    """Check for newer Airfield releases and print details."""
-    res = check_for_update(force=force)
-    if res is None:
-        console.print("[yellow]Unable to determine update status.[/yellow]")
+def _is_editable_install() -> bool:
+    """PEP 610: editable installs record dir_info.editable in direct_url.json."""
+    try:
+        from importlib import metadata as _metadata
+
+        text = _metadata.distribution("airfield").read_text("direct_url.json")
+        if text:
+            return bool(json.loads(text).get("dir_info", {}).get("editable"))
+    except Exception:
+        pass
+    return False
+
+
+def update(
+    force: bool = typer.Option(False, "--force", help="Reinstall even if already up-to-date"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Check for updates without installing"),
+):
+    """Update Airfield to the latest release via pipx."""
+    # Never clobber a development checkout: an editable install points the
+    # global command at working-tree source (possibly a fork mid-change).
+    if _is_editable_install():
+        console.print("[yellow]This is an editable (development) install; refusing to overwrite it.[/yellow]")
+        console.print("Update it with `git pull` in your source checkout instead.")
         raise typer.Exit(1)
 
-    cur = res.get("current_version")
-    latest = res.get("latest_version")
-    url = res.get("url")
-    if res.get("newer"):
-        console.print(f"[bold yellow]Update available:[/bold yellow] {cur} → {latest}")
-        console.print(f"Run: [bold]airfield system update --force[/bold] to refresh details")
-        console.print(f"Release: {url}")
-        raise typer.Exit(2)
+    res = check_for_update(force=True)
+    if res is None:
+        console.print("[yellow]Unable to determine update status from GitHub.[/yellow]")
+        if not force:
+            console.print("Use [bold]--force[/bold] to reinstall anyway.")
+            raise typer.Exit(1)
+    else:
+        cur = res.get("current_version")
+        latest = res.get("latest_version")
+        if res.get("newer"):
+            console.print(f"[bold yellow]Update available:[/bold yellow] {cur} → {latest}")
+            console.print(f"Release: {res.get('url')}")
+        elif not force:
+            console.print(f"[green]Airfield up-to-date ({cur}).[/green]")
+            raise typer.Exit(0)
+        else:
+            console.print(f"[green]Airfield is up-to-date ({cur}), but forcing reinstall.[/green]")
 
-    console.print(f"[green]Airfield up-to-date ({cur}).[/green]")
+    if dry_run:
+        raise typer.Exit(2 if (res and res.get("newer")) else 0)
+
+    if shutil.which("pipx") is None:
+        console.print("[red]pipx not found; install pipx (or update manually) and retry.[/red]")
+        raise typer.Exit(1)
+
+    # Same repo slug the update check uses; AIRFIELD_REPO overrides for forks.
+    source = f"git+https://github.com/{_GITHUB_REPO}.git"
+    console.print(f"Updating Airfield via pipx from {source}...")
+    result = subprocess.run(["pipx", "install", "--force", source], check=False)
+    if result.returncode != 0:
+        console.print("[red]Failed to update Airfield.[/red]")
+        raise typer.Exit(1)
+
+    console.print("[bold green]Airfield updated successfully.[/bold green]")
 
 
 def install_alias(

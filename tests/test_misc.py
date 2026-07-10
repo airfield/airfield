@@ -24,3 +24,46 @@ def test_system_clean(cli_runner, mocker):
     result = cli_runner.invoke(app, ["system", "clean"])
     assert result.exit_code == 0
     assert "Removed 5 Airfield container(s)" in result.output
+
+def test_system_update_installs_via_pipx(cli_runner, mocker):
+    mocker.patch("airfield.cli.tools_system.check_for_update", return_value={
+        "current_version": "0.1.0",
+        "latest_version": "0.2.0",
+        "url": "https://github.com/airfield/airfield/releases/tag/v0.2.0",
+        "newer": True,
+    })
+    mocker.patch("airfield.cli.tools_system._is_editable_install", return_value=False)
+    mocker.patch("airfield.cli.tools_system.shutil.which", return_value="/usr/bin/pipx")
+    subprocess_mock = mocker.patch("subprocess.run")
+    subprocess_mock.return_value.returncode = 0
+
+    result = cli_runner.invoke(app, ["system", "update"])
+    assert result.exit_code == 0
+    assert "Updating Airfield via pipx" in result.output
+    subprocess_mock.assert_called_once_with(
+        ["pipx", "install", "--force", "git+https://github.com/airfield/airfield.git"], check=False
+    )
+
+def test_system_update_refuses_editable_install(cli_runner, mocker):
+    mocker.patch("airfield.cli.tools_system._is_editable_install", return_value=True)
+    subprocess_mock = mocker.patch("subprocess.run")
+
+    result = cli_runner.invoke(app, ["system", "update"])
+    assert result.exit_code == 1
+    assert "editable" in result.output
+    subprocess_mock.assert_not_called()
+
+def test_system_update_dry_run_reports_without_installing(cli_runner, mocker):
+    mocker.patch("airfield.cli.tools_system.check_for_update", return_value={
+        "current_version": "0.1.0",
+        "latest_version": "0.2.0",
+        "url": "u",
+        "newer": True,
+    })
+    mocker.patch("airfield.cli.tools_system._is_editable_install", return_value=False)
+    subprocess_mock = mocker.patch("subprocess.run")
+
+    result = cli_runner.invoke(app, ["system", "update", "--dry-run"])
+    assert result.exit_code == 2
+    assert "Update available" in result.output
+    subprocess_mock.assert_not_called()

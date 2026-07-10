@@ -66,7 +66,7 @@ Common lifecycle commands:
 - `airfield subprojects undo` (undo the last subprojects operation)
 - `airfield system alias` (install `a` shorthand)
 - `airfield system install-completion` (set up shell completion)
-- `airfield system update` (check for new releases)
+- `airfield system update` (update the Airfield tool to the latest release)
 - `airfield system clean` (remove containers)
 - `airfield doctor`
 
