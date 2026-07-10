@@ -112,6 +112,35 @@ def test_subprojects_push_and_undo(cli_runner, temp_workspace):
     assert "ahead 1" in status_result3.output
 
 
+def test_subprojects_push_no_upstream(cli_runner, temp_workspace):
+    cli_runner.invoke(app, ["project", "init", "."])
+    remote_repo = temp_workspace / "remote"
+    remote_repo.mkdir()
+    subprocess.run(["git", "init", "--bare"], cwd=remote_repo, check=True, capture_output=True)
+    
+    sub1 = temp_workspace / "src" / "sub1"
+    sub1.mkdir(parents=True)
+    setup_git_repo(sub1)
+    
+    subprocess.run(["git", "remote", "add", "origin", str(remote_repo)], cwd=sub1, check=True)
+    subprocess.run(["git", "checkout", "-b", "airfield"], cwd=sub1, check=True, capture_output=True)
+    
+    push_result = cli_runner.invoke(app, ["subpackages", "push", "--auto"])
+    assert push_result.exit_code == 0
+    assert "Pushed in sub1" in push_result.output
+    
+    res = subprocess.run(["git", "rev-parse", "--abbrev-ref", "@{u}"], cwd=sub1, capture_output=True, text=True)
+    assert res.returncode == 0
+    assert "origin/airfield" in res.stdout
+    
+    undo_push = cli_runner.invoke(app, ["subpackages", "undo", "--auto"])
+    assert undo_push.exit_code == 0
+    assert "Undid push in sub1" in undo_push.output
+    
+    res2 = subprocess.run(["git", "rev-parse", "--abbrev-ref", "@{u}"], cwd=sub1, capture_output=True, text=True)
+    assert res2.returncode != 0
+
+
 def test_subprojects_pull_and_undo(cli_runner, temp_workspace):
     cli_runner.invoke(app, ["project", "init", "."])
     remote_repo = temp_workspace / "remote"
@@ -173,7 +202,7 @@ def test_subprojects_track(cli_runner, temp_workspace):
     
     result = cli_runner.invoke(app, ["subpackages", "track", "--auto"])
     assert result.exit_code == 0
-    assert "Tracked 1 new subprojects" in result.output
+    assert "Tracked 1 new Subpackages" in result.output
     
     # Verify yaml
     with open(temp_workspace / "airfield.yaml") as f:
@@ -230,7 +259,7 @@ def test_subprojects_diff(cli_runner, temp_workspace):
     # No dirty subprojects
     result = cli_runner.invoke(app, ["subpackages", "diff"])
     assert result.exit_code == 0
-    assert "No dirty subprojects found." in result.output
+    assert "No dirty Subpackages found." in result.output
     
     # Make it dirty
     (sub1 / "file.txt").write_text("changed\n")
@@ -340,3 +369,94 @@ def test_subprojects_checkout_to_packages(cli_runner, temp_workspace):
     
     # Verify src/sub1 does not exist
     assert not (temp_workspace / "src" / "sub1").exists()
+
+
+def test_subpackages_switch_and_undo(cli_runner, temp_workspace):
+    # Setup parent project git repo
+    setup_git_repo(temp_workspace)
+    subprocess.run(["git", "branch", "feature-main"], cwd=temp_workspace, check=True)
+    subprocess.run(["git", "checkout", "feature-main"], cwd=temp_workspace, check=True)
+
+    cli_runner.invoke(app, ["project", "init", "."])
+
+    # Setup subpackage repo
+    sub1 = temp_workspace / "src" / "sub1"
+    sub1.mkdir(parents=True)
+    setup_git_repo(sub1)
+    subprocess.run(["git", "branch", "feature-main"], cwd=sub1, check=True)
+    subprocess.run(["git", "branch", "explicit-branch"], cwd=sub1, check=True)
+
+    # 1. Test switch without args (should prompt for confirmation unless --auto)
+    # Cancel confirmation
+    cancel_res = cli_runner.invoke(app, ["subpackages", "switch"], input="n\n")
+    assert cancel_res.exit_code == 0
+    assert "Skipped switching branches" in cancel_res.output
+
+    # Confirm confirmation
+    switch_res = cli_runner.invoke(app, ["subpackages", "switch"], input="y\n")
+    assert switch_res.exit_code == 0
+    assert "Switched Subpackage 'sub1' to branch 'feature-main'" in switch_res.output
+
+    # Verify branch switched
+    res = subprocess.run(["git", "branch", "--show-current"], cwd=sub1, capture_output=True, text=True)
+    assert res.stdout.strip() == "feature-main"
+
+    # 2. Undo switch
+    undo_res = cli_runner.invoke(app, ["subpackages", "undo", "--auto"])
+    assert undo_res.exit_code == 0
+    assert "Undid switch in sub1" in undo_res.output
+    res_undo = subprocess.run(["git", "branch", "--show-current"], cwd=sub1, capture_output=True, text=True)
+    assert res_undo.stdout.strip() in ["master", "main"]
+
+    # 3. Test switch with explicit arg (no prompt needed)
+    explicit_res = cli_runner.invoke(app, ["subpackages", "switch", "explicit-branch"])
+    assert explicit_res.exit_code == 0
+    assert "Switched Subpackage 'sub1' to branch 'explicit-branch'" in explicit_res.output
+    res_exp = subprocess.run(["git", "branch", "--show-current"], cwd=sub1, capture_output=True, text=True)
+    assert res_exp.stdout.strip() == "explicit-branch"
+
+    # 4. Test switch when branch not found (prompt to create)
+    # Skip creation
+    skip_res = cli_runner.invoke(app, ["subpackages", "switch", "new-missing-branch"], input="n\n")
+    assert "Skipped creating branch 'new-missing-branch' in Subpackage 'sub1'" in skip_res.output
+
+    # Confirm creation
+    create_res = cli_runner.invoke(app, ["subpackages", "switch", "new-missing-branch"], input="y\n")
+    assert "Created and switched Subpackage 'sub1' to new branch 'new-missing-branch'" in create_res.output
+    res_new = subprocess.run(["git", "branch", "--show-current"], cwd=sub1, capture_output=True, text=True)
+    assert res_new.stdout.strip() == "new-missing-branch"
+
+    # 5. Test switch with 'a' (yes to all)
+    sub2 = temp_workspace / "src" / "sub2"
+    sub2.mkdir(parents=True)
+    setup_git_repo(sub2)
+    all_res = cli_runner.invoke(app, ["subpackages", "switch", "all-missing-branch"], input="a\n")
+    assert "Created and switched Subpackage 'sub1' to new branch 'all-missing-branch'" in all_res.output
+    assert "Created and switched Subpackage 'sub2' to new branch 'all-missing-branch'" in all_res.output
+
+
+def test_subpackages_find_and_cd(cli_runner, temp_workspace, mocker):
+    setup_git_repo(temp_workspace)
+    cli_runner.invoke(app, ["project", "init", "."])
+
+    sub1 = temp_workspace / "src" / "sub1"
+    sub1.mkdir(parents=True)
+    setup_git_repo(sub1)
+
+    # 1. Test find
+    find_res = cli_runner.invoke(app, ["subpackages", "find", "sub1"])
+    assert find_res.exit_code == 0
+    assert str(sub1.resolve()) in find_res.output
+
+    find_bad = cli_runner.invoke(app, ["subpackages", "find", "nonexistent"])
+    assert find_bad.exit_code == 1
+
+    # 2. Test cd
+    mock_chdir = mocker.patch("os.chdir")
+    mock_execvp = mocker.patch("os.execvp")
+    cd_res = cli_runner.invoke(app, ["subpackages", "cd", "sub1"])
+    assert cd_res.exit_code == 0
+    mock_chdir.assert_called_once_with(sub1.resolve())
+    mock_execvp.assert_called_once()
+
+

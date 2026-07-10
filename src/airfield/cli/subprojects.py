@@ -1,7 +1,7 @@
 import json
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 import time
 
 import typer
@@ -11,7 +11,7 @@ from airfield.config import find_project_root, load_project_config, save_project
 
 console = Console()
 
-app = typer.Typer(help="Subproject source code operations", invoke_without_command=True)
+app = typer.Typer(help="Subpackage source code operations", invoke_without_command=True)
 
 
 def _get_log_file(project_root: Path) -> Path:
@@ -141,6 +141,25 @@ def _confirm(msg: str, auto: bool, diff_callback=None) -> bool:
         return typer.confirm(msg, default=False)
 
 
+def _confirm_all(msg: str, auto: bool) -> Tuple[bool, bool]:
+    """Prompt for confirmation with a 'yes to all' option. Returns (confirmed, new_auto_state)."""
+    if auto:
+        return True, True
+    
+    prompt_msg = f"{msg} [y/N/a]"
+    while True:
+        response = typer.prompt(prompt_msg, default="N", show_default=False).lower().strip()
+        if response in ["y", "yes"]:
+            return True, False
+        elif response in ["n", "no", ""]:
+            return False, False
+        elif response in ["a", "all", "ya", "yes to all"]:
+            return True, True
+        else:
+            console.print("Please answer y (yes), n (no), or a (yes to all).")
+
+
+
 def _echo_via_more(text: str):
     lines = text.splitlines()
     chunk_size = 20
@@ -157,7 +176,7 @@ def _echo_via_more(text: str):
 
 @app.command(name="status")
 def cmd_status():
-    """Print git status for all subprojects."""
+    """Print git status for all Subpackages."""
     project_root = find_project_root()
     if not project_root:
         console.print("[yellow]Not in an Airfield project.[/yellow]")
@@ -165,10 +184,10 @@ def cmd_status():
 
     subprojects = _get_subprojects(project_root)
     if not subprojects:
-        console.print("No subprojects found in src/ or packages/")
+        console.print("No Subpackages found in src/ or packages/")
         return
 
-    console.print(f"[bold]Subprojects status ({len(subprojects)} total)[/bold]\n")
+    console.print(f"[bold]Subpackages status ({len(subprojects)} total)[/bold]\n")
     for sp in subprojects:
         dirty = _is_dirty(sp)
         ahead, behind = _ahead_behind(sp)
@@ -193,9 +212,9 @@ def cmd_status():
 @app.command(name="commit")
 def cmd_commit(
     message: str = typer.Option(..., "-m", "--message", help="Commit message"),
-    auto: bool = typer.Option(False, "--auto", help="Do not prompt for confirmation per subproject")
+    auto: bool = typer.Option(False, "--auto", help="Do not prompt for confirmation per Subpackage")
 ):
-    """Commit changes in all dirty subprojects."""
+    """Commit changes in all dirty Subpackages."""
     project_root = find_project_root()
     if not project_root:
         console.print("[yellow]Not in an Airfield project.[/yellow]")
@@ -238,14 +257,14 @@ def cmd_commit(
                 console.print(f"Skipped {sp.name}")
 
     _record_operation(project_root, "commit", affected)
-    console.print(f"\nCommitted in {len(affected)} subprojects.")
+    console.print(f"\nCommitted in {len(affected)} Subpackages.")
 
 
 @app.command(name="push")
 def cmd_push(
-    auto: bool = typer.Option(False, "--auto", help="Do not prompt for confirmation per subproject")
+    auto: bool = typer.Option(False, "--auto", help="Do not prompt for confirmation per Subpackage")
 ):
-    """Push commits in all ahead subprojects."""
+    """Push commits in all ahead Subpackages."""
     project_root = find_project_root()
     if not project_root:
         console.print("[yellow]Not in an Airfield project.[/yellow]")
@@ -255,22 +274,48 @@ def cmd_push(
     affected = []
 
     for sp in subprojects:
-        ahead, _ = _ahead_behind(sp)
-        if ahead > 0:
-            upstream = _get_upstream(sp)
-            if not upstream:
-                console.print(f"[yellow]Skipping {sp.name}: No upstream branch found[/yellow]")
+        upstream = _get_upstream(sp)
+        if upstream:
+            ahead, _ = _ahead_behind(sp)
+            if ahead > 0:
+                if _confirm(f"Push {ahead} commit(s) in {sp.name}?", auto):
+                    remote_head_before = _get_remote_head(sp, upstream)
+                    res = _run_git(["push"], sp)
+                    if res.returncode == 0:
+                        console.print(f"[green]Pushed in {sp.name}[/green]")
+                        affected.append({
+                            "path": str(sp.relative_to(project_root)),
+                            "upstream": upstream,
+                            "old_remote_head": remote_head_before,
+                            "had_upstream": True
+                        })
+                    else:
+                        console.print(f"[red]Failed to push in {sp.name}[/red]:\n{res.stderr}")
+                else:
+                    console.print(f"Skipped {sp.name}")
+        else:
+            branch = _get_current_branch(sp)
+            if not branch:
                 continue
 
-            if _confirm(f"Push {ahead} commit(s) in {sp.name}?", auto):
-                remote_head_before = _get_remote_head(sp, upstream)
-                res = _run_git(["push"], sp)
+            remotes_res = _run_git(["remote"], sp)
+            if remotes_res.returncode != 0 or not remotes_res.stdout.strip():
+                console.print(f"[yellow]Skipping {sp.name}: No remote configured[/yellow]")
+                continue
+            remotes = remotes_res.stdout.strip().split()
+            remote = "origin" if "origin" in remotes else remotes[0]
+
+            target_upstream = f"{remote}/{branch}"
+            if _confirm(f"Push branch '{branch}' and set upstream to {target_upstream} in {sp.name}?", auto):
+                remote_head_before = _get_remote_head(sp, target_upstream)
+                res = _run_git(["push", "--set-upstream", remote, branch], sp)
                 if res.returncode == 0:
                     console.print(f"[green]Pushed in {sp.name}[/green]")
                     affected.append({
                         "path": str(sp.relative_to(project_root)),
-                        "upstream": upstream,
-                        "old_remote_head": remote_head_before
+                        "upstream": target_upstream,
+                        "old_remote_head": remote_head_before,
+                        "had_upstream": False
                     })
                 else:
                     console.print(f"[red]Failed to push in {sp.name}[/red]:\n{res.stderr}")
@@ -278,14 +323,14 @@ def cmd_push(
                 console.print(f"Skipped {sp.name}")
 
     _record_operation(project_root, "push", affected)
-    console.print(f"\nPushed in {len(affected)} subprojects.")
+    console.print(f"\nPushed in {len(affected)} Subpackages.")
 
 
 @app.command(name="pull")
 def cmd_pull(
-    auto: bool = typer.Option(False, "--auto", help="Do not prompt for confirmation per subproject")
+    auto: bool = typer.Option(False, "--auto", help="Do not prompt for confirmation per Subpackage")
 ):
-    """Pull changes in all behind subprojects."""
+    """Pull changes in all behind Subpackages."""
     project_root = find_project_root()
     if not project_root:
         console.print("[yellow]Not in an Airfield project.[/yellow]")
@@ -312,14 +357,14 @@ def cmd_pull(
                 console.print(f"Skipped {sp.name}")
 
     _record_operation(project_root, "pull", affected)
-    console.print(f"\nPulled in {len(affected)} subprojects.")
+    console.print(f"\nPulled in {len(affected)} Subpackages.")
 
 
 @app.command(name="stash")
 def cmd_stash(
-    auto: bool = typer.Option(False, "--auto", help="Do not prompt for confirmation per subproject")
+    auto: bool = typer.Option(False, "--auto", help="Do not prompt for confirmation per Subpackage")
 ):
-    """Stash changes in all dirty subprojects."""
+    """Stash changes in all dirty Subpackages."""
     project_root = find_project_root()
     if not project_root:
         console.print("[yellow]Not in an Airfield project.[/yellow]")
@@ -360,14 +405,14 @@ def cmd_stash(
                 console.print(f"Skipped {sp.name}")
 
     _record_operation(project_root, "stash", affected)
-    console.print(f"\nStashed in {len(affected)} subprojects.")
+    console.print(f"\nStashed in {len(affected)} Subpackages.")
 
 
 @app.command(name="clean")
 def cmd_clean(
     force: bool = typer.Option(False, "--force", "-f", help="Clean all changes without confirmation and only log")
 ):
-    """Log, stash, and clean all changes in dirty subprojects."""
+    """Log, stash, and clean all changes in dirty Subpackages."""
     project_root = find_project_root()
     if not project_root:
         if not force:
@@ -414,7 +459,7 @@ def cmd_clean(
 
     _record_operation(project_root, "clean", affected)
     if not force:
-        console.print(f"\nCleaned in {len(affected)} subprojects.")
+        console.print(f"\nCleaned in {len(affected)} Subpackages.")
 
 
 def _get_remote_url(cwd: Path) -> Optional[str]:
@@ -433,9 +478,9 @@ def _get_current_branch(cwd: Path) -> Optional[str]:
 
 @app.command(name="track")
 def cmd_track(
-    auto: bool = typer.Option(False, "--auto", help="Do not prompt for confirmation per subproject")
+    auto: bool = typer.Option(False, "--auto", help="Do not prompt for confirmation per Subpackage")
 ):
-    """Ensure all subprojects in src/ or packages/ are tracked in airfield.yaml."""
+    """Ensure all Subpackages in src/ or packages/ are tracked in airfield.yaml."""
     project_root = find_project_root()
     if not project_root:
         console.print("[yellow]Not in an Airfield project.[/yellow]")
@@ -448,7 +493,7 @@ def cmd_track(
     added_count = 0
     for sp in subprojects_on_disk:
         if sp.name not in subprojects_config:
-            if _confirm(f"Untracked subproject '{sp.name}' found. Add to airfield.yaml?", auto):
+            if _confirm(f"Untracked Subpackage '{sp.name}' found. Add to airfield.yaml?", auto):
                 url = _get_remote_url(sp)
                 branch = _get_current_branch(sp)
                 
@@ -471,14 +516,14 @@ def cmd_track(
     if added_count > 0:
         config_data["subprojects"] = subprojects_config
         save_project_config(project_root, config_data)
-        console.print(f"\nTracked {added_count} new subprojects in airfield.yaml.")
+        console.print(f"\nTracked {added_count} new Subpackages in airfield.yaml.")
     else:
-        console.print("\nNo new subprojects were tracked.")
+        console.print("\nNo new Subpackages were tracked.")
 
 
 @app.command(name="checkout")
 def cmd_checkout():
-    """Checkout missing subprojects that are tracked in airfield.yaml."""
+    """Checkout missing Subpackages that are tracked in airfield.yaml."""
     project_root = find_project_root()
     if not project_root:
         console.print("[yellow]Not in an Airfield project.[/yellow]")
@@ -487,7 +532,7 @@ def cmd_checkout():
     config_data = load_project_config(project_root)
     subprojects_config = config_data.get("subprojects", {})
     if not subprojects_config:
-        console.print("No subprojects configured in airfield.yaml.")
+        console.print("No Subpackages configured in airfield.yaml.")
         return
 
     src_dir = project_root / "src"
@@ -513,7 +558,7 @@ def cmd_checkout():
         version = sp_info.get("version")
         
         if not url:
-            console.print(f"[yellow]Subproject '{name}' is missing a URL in airfield.yaml. Skipping.[/yellow]")
+            console.print(f"[yellow]Subpackage '{name}' is missing a URL in airfield.yaml. Skipping.[/yellow]")
             continue
             
         console.print(f"Cloning {name} from {url}...")
@@ -535,16 +580,16 @@ def cmd_checkout():
             console.print(f"[red]Failed to clone {name}[/red]:\n{res.stderr}")
                 
     if cloned_count > 0:
-        console.print(f"\nChecked out {cloned_count} subprojects.")
+        console.print(f"\nChecked out {cloned_count} Subpackages.")
     else:
-        console.print("\nAll tracked subprojects are already present.")
+        console.print("\nAll tracked Subpackages are already present.")
 
 
 @app.command(name="undo")
 def cmd_undo(
-    auto: bool = typer.Option(False, "--auto", help="Do not prompt for confirmation per subproject")
+    auto: bool = typer.Option(False, "--auto", help="Do not prompt for confirmation per Subpackage")
 ):
-    """Undo the last subprojects operation (commit, push, pull, or stash)."""
+    """Undo the last Subpackages operation (commit, push, pull, stash, or switch)."""
     project_root = find_project_root()
     if not project_root:
         console.print("[yellow]Not in an Airfield project.[/yellow]")
@@ -559,7 +604,7 @@ def cmd_undo(
     op_name = last_op.get("operation")
     affected = last_op.get("affected", [])
 
-    console.print(f"[bold]Undoing last operation: {op_name} ({len(affected)} subprojects)[/bold]\n")
+    console.print(f"[bold]Undoing last operation: {op_name} ({len(affected)} Subpackages)[/bold]\n")
 
     for item in affected:
         sp = project_root / item["path"]
@@ -593,12 +638,18 @@ def cmd_undo(
             # Undo push
             old_remote_head = item.get("old_remote_head")
             upstream = item.get("upstream")
-            if old_remote_head and upstream:
-                # upstream is typically e.g. origin/main. We need the remote name and the branch.
+            if item.get("had_upstream", True) is False:
+                branch = _get_current_branch(sp)
+                if branch:
+                    _run_git(["branch", "--unset-upstream", branch], sp)
+            if upstream:
                 parts = upstream.split("/", 1)
                 if len(parts) == 2:
                     remote, remote_branch = parts[0], parts[1]
-                    res = _run_git(["push", "--force-with-lease", remote, f"{old_remote_head}:{remote_branch}"], sp)
+                    if old_remote_head:
+                        res = _run_git(["push", "--force-with-lease", remote, f"{old_remote_head}:{remote_branch}"], sp)
+                    else:
+                        res = _run_git(["push", remote, f":{remote_branch}"], sp)
                     if res.returncode == 0:
                         console.print(f"[green]Undid push in {sp.name}[/green]")
                     else:
@@ -624,6 +675,15 @@ def cmd_undo(
                 else:
                     console.print(f"[yellow]Could not pop stash in {sp.name} (might be clean)[/yellow]")
                     
+        elif op_name == "switch":
+            target = item.get("old_branch") or item.get("old_head")
+            if target:
+                res = _run_git(["checkout", target], sp)
+                if res.returncode == 0:
+                    console.print(f"[green]Undid switch in {sp.name}[/green]")
+                else:
+                    console.print(f"[red]Failed to undo switch in {sp.name}[/red]:\n{res.stderr}")
+
         else:
             console.print(f"[yellow]Unknown operation {op_name} in log[/yellow]")
 
@@ -636,7 +696,7 @@ def cmd_diff(
     staged: bool = typer.Option(False, "--staged", "--cached", help="Show diff of staged changes"),
     head: bool = typer.Option(False, "--head", help="Show diff of all changes (staged and unstaged)")
 ):
-    """Show git diff for all dirty subprojects."""
+    """Show git diff for all dirty Subpackages."""
     project_root = find_project_root()
     if not project_root:
         console.print("[yellow]Not in an Airfield project.[/yellow]")
@@ -669,9 +729,120 @@ def cmd_diff(
                 full_output.append("\n".join(output) + "\n")
     
     if dirty_count == 0:
-        console.print("No dirty subprojects found.")
+        console.print("No dirty Subpackages found.")
     elif full_output:
         _echo_via_more("".join(full_output))
+
+
+@app.command(name="switch")
+def cmd_switch(
+    branch: Optional[str] = typer.Argument(None, help="Branch name to switch to"),
+    auto: bool = typer.Option(False, "--auto", help="Do not prompt for confirmation per Subpackage")
+):
+    """Switch branches on all Subpackages."""
+    project_root = find_project_root()
+    if not project_root:
+        console.print("[yellow]Not in an Airfield project.[/yellow]")
+        raise typer.Exit(1)
+
+    if branch is None:
+        target_branch = _get_current_branch(project_root)
+        if not target_branch:
+            console.print("[red]Could not determine current branch of parent project.[/red]")
+            raise typer.Exit(1)
+        confirmed, auto = _confirm_all(f"Switch all Subpackages to branch '{target_branch}'?", auto)
+        if not confirmed:
+            console.print("Skipped switching branches.")
+            return
+    else:
+        target_branch = branch
+
+    subprojects = _get_subprojects(project_root)
+    if not subprojects:
+        console.print("No Subpackages found in src/ or packages/")
+        return
+
+    affected = []
+    for sp in subprojects:
+        old_branch = _get_current_branch(sp)
+        old_head = _get_head(sp)
+        res = _run_git(["checkout", target_branch], sp)
+        if res.returncode == 0:
+            console.print(f"[green]Switched Subpackage '{sp.name}' to branch '{target_branch}'[/green]")
+            affected.append({
+                "path": str(sp.relative_to(project_root)),
+                "old_branch": old_branch,
+                "old_head": old_head,
+                "switched_to": target_branch
+            })
+        else:
+            check_res = _run_git(["rev-parse", "--verify", target_branch], sp)
+            if check_res.returncode != 0:
+                confirmed, auto = _confirm_all(f"Branch '{target_branch}' does not exist in Subpackage '{sp.name}'. Create and switch to new branch?", auto)
+                if confirmed:
+                    create_res = _run_git(["checkout", "-b", target_branch], sp)
+                    if create_res.returncode == 0:
+                        console.print(f"[green]Created and switched Subpackage '{sp.name}' to new branch '{target_branch}'[/green]")
+                        affected.append({
+                            "path": str(sp.relative_to(project_root)),
+                            "old_branch": old_branch,
+                            "old_head": old_head,
+                            "switched_to": target_branch
+                        })
+                    else:
+                        console.print(f"[yellow]Warning: Could not create branch '{target_branch}' in Subpackage '{sp.name}': {create_res.stderr.strip()}[/yellow]")
+                else:
+                    console.print(f"[yellow]Skipped creating branch '{target_branch}' in Subpackage '{sp.name}'.[/yellow]")
+            else:
+                console.print(f"[yellow]Warning: Could not switch Subpackage '{sp.name}' to branch '{target_branch}': {res.stderr.strip()}[/yellow]")
+
+    _record_operation(project_root, "switch", affected)
+    console.print(f"\nSwitched branches in {len(affected)} Subpackages.")
+
+
+@app.command(name="find")
+def cmd_find(
+    name: str = typer.Argument(..., help="Name of the Subpackage to find")
+):
+    """Print the absolute path to a Subpackage."""
+    project_root = find_project_root()
+    if not project_root:
+        console.print("[yellow]Not in an Airfield project.[/yellow]")
+        raise typer.Exit(1)
+
+    subprojects = _get_subprojects(project_root)
+    for sp in subprojects:
+        if sp.name == name:
+            typer.echo(str(sp.resolve()))
+            return
+
+    console.print(f"[red]Subpackage '{name}' not found.[/red]")
+    raise typer.Exit(1)
+
+
+@app.command(name="cd")
+def cmd_cd(
+    name: str = typer.Argument(..., help="Name of the Subpackage to cd into")
+):
+    """Change directory to a Subpackage (starts a new shell)."""
+    import os
+    project_root = find_project_root()
+    if not project_root:
+        console.print("[yellow]Not in an Airfield project.[/yellow]")
+        raise typer.Exit(1)
+
+    subprojects = _get_subprojects(project_root)
+    for sp in subprojects:
+        if sp.name == name:
+            target_dir = sp.resolve()
+            console.print(f"[green]Changing directory to Subpackage '{name}' ({target_dir})[/green]")
+            os.chdir(target_dir)
+            shell = os.environ.get("SHELL", "/bin/bash")
+            os.execvp(shell, [shell])
+            return
+
+    console.print(f"[red]Subpackage '{name}' not found.[/red]")
+    raise typer.Exit(1)
 
 
 @app.callback(invoke_without_command=True)
@@ -679,3 +850,4 @@ def subprojects_main(ctx: typer.Context):
     if ctx.invoked_subcommand is None:
         console.print(ctx.get_help())
         raise typer.Exit()
+
