@@ -1,93 +1,166 @@
-# Airfield — visual architecture guide
+# Airfield — architecture overview
 
-Six diagrams that explain airfield from the outside in: the command surface,
-how it sits on a ROS 2 workspace, what happens when one package is built and
-run, what a plan is, what happens when a whole plan launches, and how an
-airfield package's metadata relates to the ROS packages it wraps.
-
-All examples use a generic project (`my_robot/` with `base_driver`,
-`camera_driver`, `nav_stack`) rather than any specific deployment. The color
-language is consistent across all five:
-
-| Color | Meaning |
-|---|---|
-| **Blue boxes** | files/config added by airfield (`airfield.yaml`, manifests, plans) |
-| **Dark teal** | the airfield CLI and built container images |
-| **Green** | containers and things that happen inside them at run time |
-| **Cream/yellow** | the project/workspace and host-side state |
-| **White/gray** | standard ROS 2 files, unmodified by airfield |
+Airfield runs each part of a robot's ROS 2 stack in its own Docker container,
+without changing how the ROS code itself is written or built. The six diagrams
+below walk from the command surface down to what actually happens at launch
+time. They are meant to be read in order — every diagram builds on the
+vocabulary of the ones before it, and they all share one example project:
+`my_robot/`, with three airfield packages called `base_driver`,
+`camera_driver`, and `nav_stack`.
 
 ---
 
-## 1. The command tree
+## 1. The command surface
 
-Every invocation is `airfield <namespace> <command> [args]`. The namespace is
-the key: `package` commands act on one package, `project` commands act on the
-whole workspace (usually by orchestrating packages through a plan), and
-everything else is support tooling. Peripheral commands are summarized; see
-[overview.md](../overview.md) for the complete tree.
+![Airfield command tree](Airfield_command_tree.png)
 
-![airfield command tree](1-command-tree.svg)
+Every invocation has the same shape: `airfield <namespace> <command>
+[arguments]`. The two namespaces mirror airfield's two core nouns:
 
-## 2. Airfield on top of a ROS 2 workspace
+- **`project`** commands act on the whole workspace: `up` launches a plan
+  (diagram 5) as a tmux session, `down` tears it down again, `liftoff` runs
+  package defaults one after another without tmux, and `run` executes a single
+  package's `default` target.
+- **`package`** commands act on one airfield package: `build` produces its
+  container image, `run` executes a named target from its `run:` map, `cmd`
+  runs any one-off command inside the container, and `shell` drops you into an
+  interactive shell there.
+- The third column is support tooling. The one to know early is `doctor`,
+  which checks host requirements (Docker, GPU/CUDA, …) before anything can
+  fail mysteriously; `subpackages` acts as git across every source repo in the
+  project at once.
 
-What a project looks like on disk. Each package folder holds a normal ROS 2
-package (white) plus one `airfield.yaml` marker (blue) describing what to
-build, what to install, and what it can run. The project root gets its own
-marker plus `dependencies/` (install recipes) and `plans/` (launch targets).
-Remove the blue files and a plain ROS 2 workspace remains — airfield wraps the
-workspace, it never rewrites the code.
+Two conveniences the tree can't show: a `[pkg name]` argument can be omitted
+when your shell is already inside that package's folder — airfield detects the
+package from the working directory (`build` is the one exception: pass `.`).
+And commands resolve by unique prefix, so `airfield pa b` is `airfield package
+build`.
 
-![file structure](2-file-structure.svg)
+## 2. A project on disk
 
-## 3. The life of one package: build vs. run
+![Airfield project layout](Airfield_ROS_integration.png)
 
-`airfield package build` produces an **environment image**: base image + the
-apt/pip dependencies resolved from the manifests + the entry script. No ROS
-source is compiled into it. The compile happens in **phase 2**: at run time the
-source is live-mounted into a fresh container, and on first run the entry
-script `colcon build`s the package into a shared host workspace
-(flock-serialized so concurrent containers never build simultaneously — a
-Jetson-class host would OOM). Every later run skips straight to the command.
+A project is a normal directory with four airfield-specific pieces at the
+root:
 
-![package lifecycle](3-package-lifecycle.svg)
+- **`airfield.yaml`** (`kind: project`) — sets the `ros_distro` and default
+  `base_image` that every package inherits, and lists the source repos that
+  make up the project.
+- **`packages/`** — each subfolder is one airfield package, and each airfield
+  package becomes exactly one container image.
+- **`dependencies/`** — one small YAML manifest per dependency, telling
+  airfield how to install it (apt or pip), split by architecture (`arm64/`,
+  `x86_64/`) with `xplatform/` for recipes that work everywhere.
+- **`plans/`** — descriptions of what a full launch looks like (diagram 5).
 
-## 4. Anatomy of a plan
+The central idea in this diagram: **an airfield package wraps one *or more*
+ROS packages.** `base_driver` bundles three (`motor_driver`, `joystick`,
+`gui`); `camera_driver` bundles two; `nav_stack` wraps exactly one — its own
+folder *is* the ROS package (`source_path: "."`), which is why its
+`package.xml` sits at the top level right next to `airfield.yaml`. The rule of
+thumb: containers isolate dependency *environments*, not ROS packages —
+bundle ROS packages whose dependencies agree, and split out a separate
+airfield package where dependencies diverge. Bundling costs no runtime
+isolation: at launch each pane still gets its own container (diagram 6).
 
-A plan is one YAML file: `windows` → `panes`, where each pane names a
-**package** (whose container to run in) and a **cmd** (what to run there).
-The same package may appear in several panes — one image, many containers.
-A `null` pane is just a bare shell.
+The extra `base_driver/` and `camera_driver/` folders marked *(ROS
+metapackage)* are the glue that makes bundling work — they're explained in the
+next diagram. The optional `.air` file holds machine-local extras (such as
+additional container mounts) that belong to one machine rather than to the
+shared package config.
 
-![plan anatomy](4-plan-anatomy.svg)
+## 3. Inside one airfield package
 
-## 5. Launch time: `airfield project up <plan>`
+![Airfield package anatomy](Airfield_src_path.png)
 
-`project up` renders the plan into a tmuxinator config and launches it: one
-tmux pane per plan entry, each running `airfield package cmd <pkg> -- "<cmd>"`
-— i.e. each containerized pane is exactly diagram 3's run phase, reusing the
-images from diagram 3's build phase. All containers mount the same host
-workspace, so the first container to need a package builds it and the rest
-just source `install/`: **build once, launch many**. `project down` kills the
-session and every pane's container with it.
+Zooming into `packages/base_driver/`: the left side is its entire
+`airfield.yaml`; the right side is the source tree it points at.
 
-![launch time](5-launch-time.svg)
+- **`source_path`** names the folder colcon treats as workspace source. Here
+  `src/` holds three completely ordinary ROS 2 packages, each with its own
+  `package.xml` — airfield never modifies them. (When a package wraps a single
+  ROS package, `source_path: "."` skips the inner folder entirely —
+  `nav_stack` in diagram 2.)
+- **`dependencies`** are installed into the package's one shared image
+  (diagram 4); **`devices`** and **`group_add`** pass hardware through to the
+  container (here `/dev/input` plus the dialout group for serial ports).
+- **`run:`** gives memorable names to launch commands. Note that the targets
+  invoke the *inner* ROS packages' executables (`ros2 run motor_driver
+  motor_node`) — by the time these commands execute, the container is just a
+  sourced ROS workspace.
+- The fourth folder in `src/`, `base_driver/`, is a **ROS metapackage**: a
+  `package.xml` with no code that only depends on the other three. It
+  deliberately shares the airfield package's name — on first run airfield
+  builds `colcon build --packages-up-to base_driver` (diagram 4), and that
+  name match is what lets a single command build the whole bundle.
 
-## 6. One `airfield.yaml`, many `package.xml` files
+One naming trap: the `src/` at the top of the package (airfield's
+`source_path`) is a workspace-style folder that holds whole ROS packages,
+while the `src/` inside `gui/` is that ROS package's own C++ source folder.
+Same name, unrelated jobs.
 
-The two manifests side by side, fields included. `package.xml` is colcon's
-file: it describes one ROS package and is read, unmodified, inside the
-container at first-run build. `airfield.yaml` is airfield's file: it describes
-the container around all of them — `source_path` points at the ROS source
-tree, `dependencies`/`devices`/`base_image` shape the image, and the `run:`
-map names launchable targets inside the wrapped ROS packages. The only
-connection between the files is a one-time convenience: `package init --path`
-reads the `<depend>` tags to seed `dependencies:`.
+## 4. Build vs. run — the two-phase lifecycle
 
-![airfield.yaml vs package.xml](6-airfield-yaml-vs-package-xml.svg)
+![Airfield build vs run](Airfield_build_vs_run.png)
 
----
+**Phase 1 — `airfield package build`** produces an *environment image*,
+`airfield-pkg-base_driver`: a base image (package override → project default →
+ROS-distro default), the apt/pip installs resolved from the dependency
+manifests, and a small entry script. No ROS source is compiled into the image
+— which is exactly why it only needs rebuilding when dependencies change.
 
-*The SVGs are hand-authored; edit coordinates directly or open them in any
-vector editor. ASCII source wireframes live in
-[airfield-architecture-diagrams.md](../airfield-architecture-diagrams.md).*
+**Phase 2 — every `run`/`cmd`/`shell`** starts a fresh, disposable container
+from that image. Your source is live-mounted, so edits on the host are
+instantly visible inside — no rebuild, no copy. The entry script then decides:
+if `install/base_driver` already exists in the shared workspace, it skips
+straight to your command; on first run it compiles with `colcon build
+--packages-up-to base_driver` — this is where the metapackage from diagram 3
+earns its keep, pulling all three bundled ROS packages into one build. Either
+way it finishes by sourcing ROS plus the workspace `install/` and executing
+the requested command.
+
+The `~/workspace/` folder (`src`, `build`, `install`, `log`) lives on the host
+and is mounted into every container of the package: the first container to
+need a package compiles it once, and every later one — including every pane of
+a plan (diagram 6) — just sources the result. Simultaneous first runs can't
+collide; the build is serialized with a lock.
+
+## 5. A plan: declaring a launch
+
+![Airfield plan anatomy](Airfield_plan_anatomy.png)
+
+A plan is one YAML file in `plans/` that describes everything `airfield
+project up` should launch. `windows` split into `panes`, and each pane sets
+two keys:
+
+- **`package:`** — which airfield package's container this pane runs in
+- **`cmd:`** — what to run there; it's a raw shell command executed inside the
+  container, so it addresses the inner ROS packages directly (`ros2 run` /
+  `ros2 launch`), just like the `run:` targets in diagram 3
+
+`pre_window` is exported into every pane — the place for session-wide
+environment like `MAP=speedway`. The same package may drive several panes
+(`base_driver` appears twice here), which costs nothing extra: one image, two
+containers, as the next diagram shows. A pane can also be left `null` to get a
+plain shell inside the session — handy for debugging alongside the running
+nodes.
+
+## 6. Launch time: `airfield project up navstack`
+
+![Airfield launch time](Airfield_launch_time.png)
+
+`project up` renders the plan into a tmuxinator config
+(`.airfield/navstack.tmuxinator.yml`) and starts it as a tmux session. Each
+pane executes `airfield package cmd <package> -- "<cmd>"` — in other words,
+every pane is exactly one phase-2 run from diagram 4, reusing the images from
+phase 1.
+
+Follow the fan-out in the middle: three images back four containers.
+`base_driver`'s single image spawns two independent containers (panes 2
+and 3) — bundling several ROS packages into one airfield package (diagram 2)
+never sacrifices runtime isolation. All four containers mount the same
+`~/workspace/`, so the first pane to need a package builds it and the rest
+just source `install/`: **build once, launch many.**
+
+`airfield project down` kills the session, and each pane's airfield process
+stops its own container on the way out — no orphaned containers left running.
