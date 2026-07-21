@@ -1,9 +1,9 @@
-# Airfield Architecture — Diagrams (ICRA paper)
+# Airfield architecture diagrams (ICRA paper)
 
 ASCII wireframes / mappings to be redrawn in Canva. Two figures:
 
-- **Diagram #1** — command tree + namespace hierarchy + runtime relationships.
-- **Diagram #2** — file structure, build-time / launch-time flow, and the `plans/` format.
+- **Diagram #1:** command tree + namespace hierarchy + runtime relationships.
+- **Diagram #2:** file structure, build-time / launch-time flow, and the `plans/` format.
 
 Audience: robotics researchers (not DevOps). Scope favors the build/run/launch
 lifecycle; peripheral commands (`subpackages`, `system`, `docker cache`,
@@ -21,7 +21,7 @@ are a **generic example** (`my_robot/`), not any specific deployment.
 
 ---
 
-## Diagram #1 — Command tree & namespace hierarchy
+## Diagram #1: command tree & namespace hierarchy
 
 ```
 ═══════════════════════════════════════════════════════════════════════════════
@@ -80,7 +80,7 @@ are a **generic example** (`my_robot/`), not any specific deployment.
    │  from the plan &    │   │  run: map (lists them if none given)   │
    │  LAUNCH the tmux    │   │                                        │
    │  session            │   │ dependencies                           │
-   │  (--no-launch =     │   │  check    upstream                     │
+   │  (--no-launch =     │   │  check   upstream   pull               │
    │   generate only)    │   │  (manifest name-clashes vs shared       │
    │                     │   │   packages repo)                       │
    │ down [plan]         │   │                                        │
@@ -127,7 +127,7 @@ liftoff → project run → default chain.
 
 ---
 
-## Diagram #2 — File structure, build time & plans
+## Diagram #2: file structure, build time & plans
 
 ```
 ═══════════════════════════════════════════════════════════════════════════════
@@ -185,7 +185,7 @@ my_robot/                             ◄── PROJECT  (airfield.yaml, kind: p
                                       This is "build once, launch many."
 ```
 
-### Build time  ( `airfield package build <pkg>` — or implicit on first run )
+### Build time  ( `airfield package build <pkg>`, or implicit on first run )
 
 ```
    package airfield.yaml ─┐
@@ -267,7 +267,7 @@ point that every pane sources. A small inset shows the plan-yaml
   up one container per pane, and if each pane built its own `colcon` package
   concurrently the host can run out of memory. The entry wrapper's
   `flock`-serialized, parallelism-capped build into a single shared
-  `~/workspace/install` restores the "build once, launch many" model — every
+  `~/workspace/install` restores the "build once, launch many" model: every
   pane sources the same prebuilt install and just launches.
 - **An airfield package ≠ a ROS package.** One airfield package can wrap several
   ROS packages and appear in multiple plan panes (each running a different
