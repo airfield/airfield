@@ -10,6 +10,7 @@ import sys
 import time
 import uuid
 from pathlib import Path
+from string import Template
 from typing import List, Optional, Tuple
 
 import typer
@@ -520,6 +521,23 @@ def _configured_mounts(pkg_dir: Path) -> List[str]:
     return mounts
 
 
+def _expand_mount_vars(mount: str) -> str:
+    """Expand environment variables in a mount path, plus ``$UID``/``$GID``.
+
+    ``.air`` is per-machine config, and some host paths embed the login user's
+    numeric id -- e.g. gdm's Xauthority cookie lives under ``/run/user/<uid>``.
+    Supporting ``$UID`` lets one documented snippet be copied onto every machine
+    instead of each hardcoding its own number (which then silently mounts
+    nothing on a host where the id differs).
+
+    ``$UID`` is a shell variable that is never exported, so ``os.environ`` alone
+    cannot resolve it -- inject the real ids. Unknown variables are left as-is
+    rather than blanked, so a literal ``$`` in a path stays harmless.
+    """
+    values = {**os.environ, "UID": str(os.getuid()), "GID": str(os.getgid())}
+    return Template(mount).safe_substitute(values)
+
+
 def in_airfield_container() -> bool:
     """Check if currently running inside an Airfield-built container."""
     return os.environ.get("IN_AIRFIELD_CONTAINER") == "1"
@@ -579,7 +597,7 @@ def docker_mount_args(pkg_dir: Path, pkg: Package, source_root: Path, target_dev
             seen_mounts.add(str(peer_src))
 
     for mount in _configured_mounts(pkg_dir):
-        mount_path = Path(mount).expanduser()
+        mount_path = Path(_expand_mount_vars(mount)).expanduser()
         if not mount_path.is_absolute():
             mount_path = (pkg_dir / mount_path).resolve()
         else:

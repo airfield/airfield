@@ -321,6 +321,32 @@ def test_configured_file_mounts_are_allowed(temp_workspace):
     assert str(missing) not in joined
 
 
+def test_air_mount_expands_env_vars_and_uid(temp_workspace, monkeypatch):
+    """.air paths may reference env vars and $UID, so one documented snippet
+    works on every machine -- e.g. gdm's cookie lives under /run/user/<uid>,
+    which differs per host. $UID is a shell variable that is never exported, so
+    it must resolve even though it is absent from os.environ."""
+    import os
+    from airfield.cli.package_exec import docker_mount_args
+
+    pkg_dir = temp_workspace / "pkg"
+    pkg_dir.mkdir()
+
+    uid_dir = temp_workspace / "run" / str(os.getuid()) / "gdm"
+    uid_dir.mkdir(parents=True)
+    monkeypatch.setenv("AIRFIELD_TEST_ROOT", str(temp_workspace))
+
+    (pkg_dir / ".air").write_text(
+        "mounts:\n  - $AIRFIELD_TEST_ROOT/run/$UID/gdm\n", encoding="utf-8"
+    )
+
+    args = docker_mount_args(pkg_dir, Package(name="p"), pkg_dir, "x86_64")
+    joined = " ".join(args)
+    # resolved to the real uid path (so it is not skipped as "does not exist")
+    assert f"{uid_dir}:{uid_dir}" in joined
+    assert "$UID" not in joined
+
+
 # --- peer-source mounts: independent of CWD and of the host's architecture ----
 
 @pytest.fixture
