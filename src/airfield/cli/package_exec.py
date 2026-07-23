@@ -535,7 +535,7 @@ def docker_mount_args(pkg_dir: Path, pkg: Package, source_root: Path) -> List[st
 
     # Mount peer-package sources (custom deps built from source, e.g. amrl_msgs)
     # so colcon can build them alongside this package via --packages-up-to.
-    root = find_project_root()
+    root = find_project_root(pkg_dir)
     if root is not None:
         target = "arm64" if is_arm64() else "x86_64"
         for peer_name, peer_src in _collect_peer_source_mounts(
