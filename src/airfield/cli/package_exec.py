@@ -7,6 +7,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import time
 import uuid
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -44,7 +45,32 @@ def run_container_foreground(run_cmd: List[str]) -> int:
     # insert `--name <name>` immediately after the `run` subcommand
     named_cmd = [run_cmd[0], run_cmd[1], "--name", name, *run_cmd[2:]]
 
+    def _graceful_sigint() -> None:
+        # Ask the in-container workload to shut down the way ROS nodes and
+        # hardware drivers expect -- SIGINT -- BEFORE docker's SIGTERM/SIGKILL.
+        # PID 1 is a non-interactive `bash -lc ...` wrapper that does NOT forward
+        # signals to the process it launched, so a plain `docker stop` never
+        # reaches the node: e.g. the RPLIDAR driver stops its motor only from its
+        # SIGINT handler, so without this it is SIGKILLed with the disk still
+        # spinning. SIGINT every process EXCEPT PID 1 (kept alive so the
+        # container stays up while its children clean up) -- reaching the
+        # grandchild nodes the bash parent would otherwise swallow signals for --
+        # then give them a moment to run cleanup before we fall through to
+        # `docker stop`. Best-effort: if the container is already gone this no-ops.
+        subprocess.run(
+            [
+                "docker", "exec", name, "sh", "-c",
+                'for p in /proc/[0-9]*; do pid=${p#/proc/}; '
+                '[ "$pid" = 1 ] || kill -INT "$pid" 2>/dev/null; done',
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        time.sleep(1.0)
+
     def _stop() -> None:
+        _graceful_sigint()
         subprocess.run(
             ["docker", "stop", "-t", "2", name],
             stdout=subprocess.DEVNULL,

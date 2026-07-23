@@ -190,6 +190,9 @@ def test_run_container_foreground_stops_container_on_sighup(mocker):
         return mocker.Mock(returncode=0)
 
     mocker.patch("airfield.cli.package_exec.subprocess.run", side_effect=fake_run)
+    # Teardown waits a beat after the graceful SIGINT for driver cleanup; don't
+    # actually sleep in the test.
+    mocker.patch("airfield.cli.package_exec.time.sleep")
 
     proc = mocker.Mock()
 
@@ -205,9 +208,16 @@ def test_run_container_foreground_stops_container_on_sighup(mocker):
     rc = run_container_foreground(["docker", "run", "--rm", "img", "true"])
 
     assert rc == 137
-    assert stop_calls, "SIGHUP did not trigger a docker stop"
-    assert stop_calls[0][:2] == ["docker", "stop"]
-    assert stop_calls[0][-1].startswith("airfield-run-")
+    assert stop_calls, "SIGHUP did not trigger a teardown"
+    # Must docker-stop the named container instead of orphaning it...
+    stops = [c for c in stop_calls if c[:2] == ["docker", "stop"]]
+    assert stops, "SIGHUP did not trigger a docker stop"
+    assert stops[0][-1].startswith("airfield-run-")
+    # ...but first SIGINT the in-container workload (docker exec) so hardware
+    # drivers -- e.g. the RPLIDAR motor -- shut down cleanly before the kill.
+    execs = [i for i, c in enumerate(stop_calls) if c[:2] == ["docker", "exec"]]
+    assert execs, "no graceful SIGINT (docker exec) issued before stop"
+    assert execs[0] < stop_calls.index(stops[0]), "graceful SIGINT must precede docker stop"
     # handler must be restored on exit
     assert signal.getsignal(signal.SIGHUP) == signal.SIG_DFL
 
