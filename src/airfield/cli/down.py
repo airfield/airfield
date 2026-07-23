@@ -23,12 +23,19 @@ def _kill_session(name: str) -> bool:
 
 
 def _prune_containers() -> None:
-    result = subprocess.run(
-        ["docker", "ps", "-aq", "--filter", "name=airfield-run-"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    # airfield-run-* containers are explicitly named only for Docker runs
+    # (see run_container_foreground). If Docker isn't installed, skip.
+    try:
+        result = subprocess.run(
+            ["docker", "ps", "-aq", "--filter", "name=airfield-run-"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        print("Docker not found; skipping airfield-run-* container prune.")
+        return
+
     ids = [i for i in (result.stdout or "").split() if i]
     if not ids:
         print("No airfield-run-* containers to prune.")
