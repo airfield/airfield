@@ -15,7 +15,7 @@ import typer
 import yaml
 
 from airfield.builder import Builder
-from airfield.config import AIRFIELD_CONFIG, AIRFIELD_LOCAL_CONFIG, _load_yaml, dependencies_dir, dependency_search_paths, find_project_root, packages_dir, require_package_root, is_arm_mac, is_arm64
+from airfield.config import AIRFIELD_CONFIG, AIRFIELD_LOCAL_CONFIG, _load_yaml, dependencies_dir, dependency_search_paths, find_project_root, packages_dir, require_package_root, is_arm_mac
 from airfield.host_check import detect_host_facts, evaluate_host_dependencies
 from airfield.models import Dependency, Package, SUPPORTED_ROS_DISTROS
 
@@ -524,7 +524,7 @@ def _collect_peer_source_mounts(
     return list(peers.items())
 
 
-def docker_mount_args(pkg_dir: Path, pkg: Package, source_root: Path) -> List[str]:
+def docker_mount_args(pkg_dir: Path, pkg: Package, source_root: Path, target_device: str) -> List[str]:
     """Build docker -v mount arguments from package source and config mounts."""
     mount_args: List[str] = []
 
@@ -537,9 +537,8 @@ def docker_mount_args(pkg_dir: Path, pkg: Package, source_root: Path) -> List[st
     # so colcon can build them alongside this package via --packages-up-to.
     root = find_project_root(pkg_dir)
     if root is not None:
-        target = "arm64" if is_arm64() else "x86_64"
         for peer_name, peer_src in _collect_peer_source_mounts(
-            pkg, root, dependency_search_paths(root, target)
+            pkg, root, dependency_search_paths(root, target_device)
         ):
             if str(peer_src) in seen_mounts or not peer_src.exists():
                 continue

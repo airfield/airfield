@@ -33,7 +33,7 @@ def run(
     image_name = build_package_image(pkg_dir, pkg, deps, target_device=target_device)
 
     console.print(f"Build successful. Opening shell in [cyan]{image_name}[/cyan]...")
-    mount_args = docker_mount_args(pkg_dir, pkg, source_root)
+    mount_args = docker_mount_args(pkg_dir, pkg, source_root, target_device)
     runtime_gpu_args = gpu_runtime_args()
     if is_arm_mac():
         run_cmd = [

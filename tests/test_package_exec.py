@@ -305,7 +305,7 @@ def test_configured_file_mounts_are_allowed(temp_workspace):
     missing = temp_workspace / "does_not_exist"
     (pkg_dir / ".air").write_text(f"mounts:\n  - {file_mount}\n  - {missing}\n", encoding="utf-8")
 
-    args = docker_mount_args(pkg_dir, Package(name="p"), pkg_dir)
+    args = docker_mount_args(pkg_dir, Package(name="p"), pkg_dir, "x86_64")
     joined = " ".join(args)
     assert f"{file_mount}:{file_mount}" in joined
     assert str(missing) not in joined

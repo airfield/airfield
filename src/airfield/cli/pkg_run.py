@@ -145,7 +145,7 @@ def run(
 
     image_name = build_package_image(pkg_dir, pkg, deps, target_device=target_device)
 
-    mount_args = docker_mount_args(pkg_dir, pkg, source_root)
+    mount_args = docker_mount_args(pkg_dir, pkg, source_root, target_device)
     runtime_gpu_args = gpu_runtime_args()
     entry_env_args, container_cmd = entry_wrap_args(pkg, command_text)
     console.print(f"Build successful. Running [bold]{run_name}[/bold] in [cyan]{image_name}[/cyan]:")
