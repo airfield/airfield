@@ -122,3 +122,21 @@ def test_project_down_named_plan_and_prune(cli_runner, project_with_plans, mocke
     assert kills == [["tmux", "kill-session", "-t", "navstack"]]
     rms = [c for c in calls if c[:3] == ["docker", "rm", "-f"]]
     assert rms == [["docker", "rm", "-f", "abc123", "def456"]]
+
+
+@pytest.mark.parametrize("missing", ["tmux", "docker"])
+def test_project_down_survives_missing_binaries(cli_runner, project_with_plans, mocker, missing):
+    """`down` reaches for tmux and (with --prune) docker. Neither is guaranteed to
+    exist on every host, and a missing one must report itself rather than crash
+    the teardown with a FileNotFoundError traceback."""
+    def fake_run(cmd, **kwargs):
+        if cmd[0] == missing:
+            raise FileNotFoundError(2, "No such file or directory", cmd[0])
+        return mocker.Mock(returncode=0, stdout="", stderr="")
+
+    mocker.patch("airfield.cli.down.subprocess.run", side_effect=fake_run)
+
+    result = cli_runner.invoke(app, ["project", "down", "--prune"])
+    assert result.exit_code == 0
+    assert not isinstance(result.exception, FileNotFoundError)
+    assert "not found" in result.output

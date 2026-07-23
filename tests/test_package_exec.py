@@ -319,3 +319,77 @@ def test_configured_file_mounts_are_allowed(temp_workspace):
     joined = " ".join(args)
     assert f"{file_mount}:{file_mount}" in joined
     assert str(missing) not in joined
+
+
+# --- peer-source mounts: independent of CWD and of the host's architecture ----
+
+@pytest.fixture
+def project_with_peer(tmp_path, mocker, monkeypatch):
+    """A project whose `main` package depends on a peer package built from source.
+
+    Deliberately laid out on disk (rather than mocking find_project_root) so the
+    tests can move the CWD around and observe how the root is resolved.
+    """
+    mocker.patch("airfield.config.packages_repo_root", return_value=tmp_path / "no_global_repo")
+
+    proj = tmp_path / "proj"
+    (proj / "packages" / "main" / "src").mkdir(parents=True)
+    (proj / "packages" / "peer" / "src").mkdir(parents=True)
+    (proj / "airfield.yaml").write_text("kind: project\nname: proj\n", encoding="utf-8")
+    (proj / "packages" / "main" / "airfield.yaml").write_text(
+        "name: main\nsource_path: src\ndependencies:\n  - peer\n", encoding="utf-8"
+    )
+    (proj / "packages" / "peer" / "airfield.yaml").write_text(
+        "name: peer\nsource_path: src\n", encoding="utf-8"
+    )
+
+    # Every test here runs from OUTSIDE the project tree.
+    monkeypatch.chdir(tmp_path)
+    return proj
+
+
+def test_peer_mounts_resolve_from_outside_the_project(project_with_peer):
+    """docker_mount_args() anchors the project root on the package, not the CWD,
+    so peer sources still mount when it is invoked from elsewhere."""
+    from airfield.cli.package_exec import docker_mount_args
+
+    pkg_dir = project_with_peer / "packages" / "main"
+    args = docker_mount_args(pkg_dir, Package.load(pkg_dir / "airfield.yaml"), pkg_dir / "src", "x86_64")
+
+    assert str(project_with_peer / "packages" / "peer" / "src") in " ".join(args)
+
+
+def test_peer_mounts_follow_target_device_not_host_arch(project_with_peer):
+    """A dep with a manifest is apt-installed and must NOT be mounted from source.
+    Which manifests count depends on --target-device, so the same package resolves
+    differently per target regardless of the architecture the CLI runs on."""
+    from airfield.cli.package_exec import docker_mount_args
+
+    deps = project_with_peer / "dependencies" / "arm64"
+    deps.mkdir(parents=True)
+    (deps / "peer.yaml").write_text("name: peer\nversion: 1.0.0\nsystem: []\nuser: []\n", encoding="utf-8")
+
+    pkg_dir = project_with_peer / "packages" / "main"
+    pkg = Package.load(pkg_dir / "airfield.yaml")
+    peer_src = str(project_with_peer / "packages" / "peer" / "src")
+
+    arm = docker_mount_args(pkg_dir, pkg, pkg_dir / "src", "arm64")
+    x86 = docker_mount_args(pkg_dir, pkg, pkg_dir / "src", "x86_64")
+
+    assert peer_src not in " ".join(arm), "arm64 manifest exists: peer is installed, not built"
+    assert peer_src in " ".join(x86), "no x86_64 manifest: peer must be built from source"
+
+
+def test_resolve_package_context_anchors_project_on_the_package(project_with_peer):
+    """Given a package path from outside any project, dependency resolution finds
+    the project the package lives in -- otherwise its peer deps look like missing
+    manifests and the command aborts."""
+    from airfield.cli.package_exec import resolve_package_context
+
+    pkg_dir, pkg, deps, source_root = resolve_package_context(
+        str(project_with_peer / "packages" / "main"), target_device="x86_64"
+    )
+
+    assert pkg.name == "main"
+    assert deps == [], "peer is built from source, so it contributes no dependency manifest"
+    assert source_root == project_with_peer / "packages" / "main" / "src"

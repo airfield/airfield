@@ -257,7 +257,14 @@ def resolve_package_context(
             pkg_dir = Path(package_name).expanduser().resolve()
         else:
             pkg_dir = require_package_root()
-        search_paths = dependency_search_paths(pkg_dir, target_device)
+        # The CWD isn't inside a project, but the package we were pointed at may
+        # still live in one (e.g. `airfield package run ~/ws/packages/foo ...`
+        # run from $HOME). Re-anchor on the package so its dependency manifests
+        # and peer-package sources resolve exactly as they do from inside the
+        # tree -- docker_mount_args() already derives its root from pkg_dir, and
+        # a root here is what lets peer deps be built from source at all.
+        root = find_project_root(pkg_dir)
+        search_paths = dependency_search_paths(root or pkg_dir, target_device)
 
     pkg_yaml = pkg_dir / AIRFIELD_CONFIG
     if not pkg_yaml.exists():

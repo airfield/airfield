@@ -7,12 +7,20 @@ from airfield.config import plans_dir, require_project_root
 
 
 def _tmux_sessions() -> List[str]:
-    result = subprocess.run(
-        ["tmux", "list-sessions", "-F", "#{session_name}"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    # Plans run as tmux sessions, so a host without tmux has none to tear down.
+    # Report that instead of dying on FileNotFoundError, so --prune can still
+    # sweep containers left over from a run started elsewhere.
+    try:
+        result = subprocess.run(
+            ["tmux", "list-sessions", "-F", "#{session_name}"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        print("tmux not found; no plan sessions to tear down.")
+        return []
+
     if result.returncode != 0:
         return []
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
@@ -51,7 +59,7 @@ def run(
     prune: bool = typer.Option(
         False,
         "--prune",
-        help="Also force-remove ALL airfield-run-* containers (crash cleanup; affects every airfield session on this host)",
+        help="Also force-remove ALL Docker airfield-run-* containers (crash cleanup; affects every airfield session on this host)",
     ),
 ):
     """Tear down a plan's tmux session.
