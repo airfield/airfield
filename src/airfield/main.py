@@ -2,7 +2,7 @@ import typer
 from rich.console import Console
 from typer.core import TyperGroup
 
-from airfield.cli import build, dependencies_upstream, doctor, docker_cache_cmd, liftoff, pkg_cmd, pkg_deinit, pkg_init, pkg_run, pkg_shell, proj_deinit, proj_init, run, status, subprojects, up
+from airfield.cli import build, dependencies_upstream, doctor, docker_cache_cmd, down, liftoff, pkg_cmd, pkg_deinit, pkg_init, pkg_run, pkg_shell, proj_deinit, proj_init, run, status, subprojects, up
 from airfield.cli import tools_system
 from airfield.config import ensure_airfield_runtime_dirs, find_package_root, find_project_root
 
@@ -52,7 +52,7 @@ tools_app.add_typer(tools_system_app, name="system")
 # Expose `airfield system` as a top-level namespace as well
 app.add_typer(tools_system_app, name="system")
 app.add_typer(docker_app, name="docker")
-app.add_typer(subprojects.app, name="subprojects")
+app.add_typer(subprojects.app, name="subpackages")
 
 pkg_app.command(name="init")(pkg_init.run)
 pkg_app.command(name="deinit")(pkg_deinit.run)
@@ -60,19 +60,22 @@ pkg_app.command(name="build")(build.run)
 pkg_app.command(name="shell")(pkg_shell.run)
 pkg_app.command(name="cmd")(pkg_cmd.run)
 pkg_app.command(name="run")(pkg_run.run)
-pkg_app.command(name="up")(up.run)
 
 deps_app = typer.Typer(help="Dependency repository operations", cls=PrefixGroup, invoke_without_command=True)
 pkg_app.add_typer(deps_app, name="dependencies")
 deps_app.command(name="check")(dependencies_upstream.check)
 deps_app.command(name="upstream")(dependencies_upstream.upstream)
+deps_app.command(name="pull")(dependencies_upstream.pull)
 
 proj_app.command(name="init")(proj_init.run)
 proj_app.command(name="deinit")(proj_deinit.run)
 proj_app.command(name="run")(run.run)
 proj_app.command(name="liftoff")(liftoff.run)
+proj_app.command(name="up")(up.run)
+proj_app.command(name="down")(down.run)
 
 tools_system_app.command(name="clean")(tools_system.run)
+tools_system_app.command(name="setup")(tools_system.setup)
 tools_system_app.command(name="update")(tools_system.update)
 tools_system_app.command(name="alias")(tools_system.install_alias)
 tools_system_app.command(name="install-completion")(tools_system.install_completion)

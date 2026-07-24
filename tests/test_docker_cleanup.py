@@ -4,6 +4,7 @@ from airfield.cli.docker_cache_cmd import cache_prune
 from airfield.cli.tools_system import _prune_build_cache
 
 def test_cleanup_all_airfield_containers_with_until(mocker):
+    mocker.patch("airfield.cli.docker_cleanup.is_arm_mac", return_value=False)
     mock_run = mocker.patch("airfield.cli.docker_cleanup.subprocess.run")
     
     def mock_subprocess_run(cmd, *args, **kwargs):
@@ -55,6 +56,7 @@ def test_cache_prune_flags(mocker):
     assert args == ["docker", "buildx", "prune", "-a", "-f", "--filter", "until=48h"]
 
 def test_prune_build_cache_flags(mocker):
+    mocker.patch("airfield.cli.tools_system.is_arm_mac", return_value=False)
     mock_run = mocker.patch("airfield.cli.tools_system.subprocess.run")
     mock_run.return_value.returncode = 0
     mock_run.return_value.stdout = ""

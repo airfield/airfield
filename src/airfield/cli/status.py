@@ -8,10 +8,12 @@ from rich.console import Console
 
 from airfield.config import (
     AIRFIELD_CONFIG,
-    dependencies_dir,
+    dependency_search_paths,
     find_package_root,
     find_project_root,
     plans_dir,
+    is_arm_mac,
+    is_arm64,
 )
 
 console = Console()
@@ -42,9 +44,10 @@ def _project_manifest_path(project_root: Path) -> Optional[Path]:
 
 
 def _docker_summary(image_name: str) -> Dict[str, Any]:
+    engine = "container" if is_arm_mac() else "docker"
     try:
         image_result = subprocess.run(
-            ["docker", "image", "inspect", image_name],
+            [engine, "image", "inspect", image_name],
             capture_output=True,
             text=True,
             check=False,
@@ -52,7 +55,7 @@ def _docker_summary(image_name: str) -> Dict[str, Any]:
         image_exists = image_result.returncode == 0
 
         container_result = subprocess.run(
-            ["docker", "ps", "-aq", "--filter", f"ancestor={image_name}"],
+            [engine, "ps", "-aq", "--filter", f"ancestor={image_name}"],
             capture_output=True,
             text=True,
             check=False,
@@ -89,7 +92,6 @@ def _print_project_status(project_root: Path) -> None:
     console.print(f"kind: {project.get('kind', 'project')}")
     console.print(f"version: {project.get('version', 'unknown')}")
     console.print(f"ros_distro: {project.get('ros_distro', 'unknown')}")
-    console.print(f"default_target_device: {project.get('default_target_device', 'x86_64')}")
 
     project_packages = project_root / "packages"
     package_count = 0
@@ -156,18 +158,24 @@ def _print_package_status(package_root: Path, project_root: Optional[Path], targ
         console.print("project_root: standalone")
 
     if project_root is not None:
-        dep_root = dependencies_dir(project_root, target_device)
+        search_paths = dependency_search_paths(project_root, target_device)
     else:
-        dep_root = package_root / "dependencies" / target_device
+        search_paths = dependency_search_paths(package_root, target_device)
 
     console.print(f"target_device: {target_device}")
-    console.print(f"dependency_root: {dep_root}")
+    console.print(f"dependency_search_paths:")
+    for sp in search_paths:
+        console.print(f"  - {sp}")
     console.print(f"declared_dependencies: {len(dependencies)}")
 
     if dependencies:
         for dep in dependencies:
-            dep_file = dep_root / f"{dep}.yaml"
-            status = "ok" if dep_file.exists() else "missing"
+            dep_exists = False
+            for sp in search_paths:
+                if (sp / f"{dep}.yaml").exists():
+                    dep_exists = True
+                    break
+            status = "ok" if dep_exists else "missing"
             console.print(f" - {dep}: {status}")
 
     image_name = f"airfield-pkg-{package_name}:latest"
@@ -177,7 +185,8 @@ def _print_package_status(package_root: Path, project_root: Optional[Path], targ
         console.print(f"image_exists: {'yes' if docker['image_exists'] else 'no'}")
         console.print(f"containers_from_image: {docker['container_count']}")
     else:
-        console.print("docker: unavailable")
+        engine_name = "container" if is_arm_mac() else "docker"
+        console.print(f"{engine_name}: unavailable")
 
 
 def run(
@@ -193,16 +202,11 @@ def run(
         console.print(f"[yellow]No Airfield project or package found at {start}.[/yellow]")
         raise typer.Exit(1)
 
+    # Same rule as every build/run command: host arch unless --target-device
+    # is passed explicitly.
     resolved_target = target_device
     if resolved_target is None:
-        resolved_target = "x86_64"
-        if project_root is not None:
-            project_manifest = _project_manifest_path(project_root)
-            if project_manifest is not None:
-                project_data = _load_yaml(project_manifest)
-                default_target = project_data.get("default_target_device")
-                if isinstance(default_target, str) and default_target.strip():
-                    resolved_target = default_target.strip()
+        resolved_target = "arm64" if is_arm64() else "x86_64"
 
     if project_root is not None:
         _print_project_status(project_root)

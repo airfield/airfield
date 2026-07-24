@@ -1,11 +1,42 @@
 import re
 import yaml
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 from pydantic import BaseModel, Field
 
 
-SUPPORTED_ROS_DISTROS = {"noetic", "humble", "jazzy"}
+# Single source of truth for supported ROS distributions. Adding a distro is
+# one entry here: base images per arch (osrf desktop images are amd64-only,
+# so arm64 uses the official ros-base tags) and the in-image build tool.
+ROS_DISTROS = {
+    "noetic": {
+        "base_image": "ros:noetic-ros-base",
+        "arm64_base_image": "ros:noetic-ros-base",
+        "core_packages": ["python3-catkin-tools"],
+    },
+    "humble": {
+        "base_image": "osrf/ros:humble-desktop",
+        "arm64_base_image": "ros:humble-ros-base",
+        "core_packages": ["python3-colcon-common-extensions"],
+    },
+    "jazzy": {
+        "base_image": "osrf/ros:jazzy-desktop",
+        "arm64_base_image": "ros:jazzy-ros-base",
+        "core_packages": ["python3-colcon-common-extensions"],
+    },
+    "kilted": {
+        "base_image": "osrf/ros:kilted-desktop",
+        "arm64_base_image": "ros:kilted-ros-base",
+        "core_packages": ["python3-colcon-common-extensions"],
+    },
+    "rolling": {
+        "base_image": "osrf/ros:rolling-desktop",
+        "arm64_base_image": "ros:rolling-ros-base",
+        "core_packages": ["python3-colcon-common-extensions"],
+    },
+}
+
+SUPPORTED_ROS_DISTROS = set(ROS_DISTROS)
 
 
 _DEP_SPEC_PATTERN = re.compile(r"^([A-Za-z0-9_.-]+)\s*(.*)$")
@@ -67,7 +98,12 @@ class Package(BaseModel):
     source_path: str = "src"
     ros_distro: Optional[str] = None
     base_image: Optional[str] = None
+    # Extra args appended to the auto `colcon build` run by the container entry
+    # wrapper, e.g. "--cmake-args -DCMAKE_BUILD_MODE=Hardware".
+    colcon_args: Optional[str] = None
     default_workdir: Optional[str] = None
+    devices: List[str] = Field(default_factory=list)
+    group_add: List[str] = Field(default_factory=list)
     run: Dict[str, str] = Field(default_factory=dict)
     
     @classmethod
@@ -95,6 +131,15 @@ class Package(BaseModel):
         if isinstance(base_image, str):
             data["base_image"] = base_image.strip() or None
 
+        colcon_args = data.get("colcon_args")
+        if isinstance(colcon_args, str):
+            data["colcon_args"] = colcon_args.strip() or None
+
+        # Devices (e.g. /dev/ttyACM0) and supplementary group ids/names are
+        # normalized to clean string lists (YAML may parse GIDs as ints).
+        data["devices"] = [str(d).strip() for d in (data.get("devices") or []) if str(d).strip()]
+        data["group_add"] = [str(g).strip() for g in (data.get("group_add") or []) if str(g).strip()]
+
         raw_run = data.get("run", {})
         if raw_run is None:
             raw_run = {}
@@ -118,9 +163,23 @@ class Package(BaseModel):
 
         return cls(**data)
 
+class Pane(BaseModel):
+    package: Optional[str] = None
+    cmd: Optional[str] = None
+
+
+class Window(BaseModel):
+    name: str
+    layout: str = "main-vertical"
+    panes: List[Union[str, Pane, None]] = Field(default_factory=list)
+    pre_window: Optional[str] = None
+
+
 class Plan(BaseModel):
     name: str
     packages: List[str] = Field(default_factory=list)
+    windows: List[Window] = Field(default_factory=list)
+    pre_window: Optional[str] = None
     
     @classmethod
     def load(cls, path: Path) -> "Plan":

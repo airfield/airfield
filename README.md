@@ -4,7 +4,18 @@ Full Documentation: [airfield.io](https://airfield.io)
 
 Airfield is a package-centric robotics framework for structuring projects, declaring dependencies, and running reproducible package containers.
 
+## Prerequisites
+
+- Linux, or an Apple Silicon Mac (uses Apple's `container` tool). Native Windows is not supported.
+- [Docker](https://docs.docker.com/engine/install/) with daemon access for your user (`docker info` should work without sudo)
+- `git`
+- `tmux` and [`tmuxinator`](https://github.com/tmuxinator/tmuxinator) — only needed for `airfield project up` plan launches (`apt-get install tmux tmuxinator`)
+
+Check your setup any time with `airfield doctor`.
+
 ## Install
+
+[Install pipx](https://pipx.pypa.io/stable/how-to/install-pipx/)
 
 Install the airfield tool from the master branch, which is stable:
 
@@ -55,7 +66,7 @@ Common lifecycle commands:
 - `airfield subprojects undo` (undo the last subprojects operation)
 - `airfield system alias` (install `a` shorthand)
 - `airfield system install-completion` (set up shell completion)
-- `airfield system update` (check for new releases)
+- `airfield system update` (update the Airfield tool to the latest release)
 - `airfield system clean` (remove containers)
 - `airfield doctor`
 
@@ -80,11 +91,14 @@ This creates:
 ```text
 my_robot/
 	airfield.yaml
+	.gitignore
+	.dockerignore
 	packages/
 	dependencies/
 		x86_64/
 		arm64/
 	plans/
+		example.yaml
 ```
 
 `airfield.yaml` is the project marker used by all `package` and `project` commands.
@@ -194,17 +208,21 @@ airfield package cmd . -- ros2 pkg list
 
 ### 6. Run a plan
 
-```bash
-airfield project liftoff example
-```
-
-### 7. Generate tmuxinator session from a plan
+Plans (`plans/*.yaml`) describe tmux sessions: windows and panes, where each pane
+can run a command inside a package's container. `project init` scaffolds
+`plans/example.yaml` showing the format.
 
 ```bash
-airfield package up example --output .airfield/example.tmuxinator.yml
+airfield project up example
 ```
 
-Add `--launch` to start tmuxinator immediately.
+This compiles the plan to a tmuxinator config and launches it (requires tmux +
+tmuxinator). Useful flags: `--no-launch` (only generate the config),
+`--inspect` (print it to stdout), `--output <path>`.
+
+There is also `airfield project liftoff <plan>`, which reads a plan's
+`packages:` list and runs each package's `default` command *sequentially,
+blocking until each exits*. Prefer `project up` for launching robot stacks.
 
 ### 8. Remove Airfield config from a package or project
 
@@ -292,6 +310,47 @@ Host dependency policy for accelerated packages:
 - in non-interactive mode, Airfield auto-selects safe defaults (for example CPU install path)
 - CUDA runtime/toolkit dependencies can be declared as normal dependencies and installed inside the container
 
+### Shared package definitions
+
+The packages repository can also hold whole packages that projects **use as
+tools but do not develop** — an AprilTag detector, a foxglove bridge, a VNC
+server. The dividing line is *who edits the code*, not whether the package has
+source:
+
+- **You're developing it** → it belongs in your project (`packages/<name>/`,
+  tracked like any subproject). Editing a package by pushing to GitHub and
+  re-pulling it through the shared repository makes no sense.
+- **You only run it** → publish a *shared package definition* once and let
+  every project pull it in on demand.
+
+A shared package definition is a manifest with an explicit `kind: package`:
+
+```yaml
+kind: package
+name: apriltag_detector
+ros_distro: jazzy
+dependencies: [...]
+run:
+  default: ros2 launch apriltag_detector detector.launch.py
+source_path: .
+source:            # optional: upstream source to clone, pinned to a ref
+  url: https://github.com/example/apriltag_detector.git
+  ref: v3.2.0
+```
+
+Referencing such a package from a project (`airfield package run
+apriltag_detector`) materializes it into `packages/apriltag_detector/` —
+cloning `source` at the pinned `ref` if declared, otherwise scaffolding an
+empty `src/` — after which it behaves like any local package. The materialized
+directory is added to the project's `.gitignore`: it is reproducible from the
+definition (delete the directory to refresh it), so it is never committed to
+the project, and a fresh checkout re-materializes it automatically on first
+use. Plain dependency manifests (no `kind`) are never treated as packages.
+
+If you find yourself editing a materialized package, promote it: delete the
+gitignore entry and track the directory in your project (or as a subproject)
+like any other package you develop.
+
 Local-only runtime options should go in `.air` (gitignored), not `airfield.yaml`.
 
 Example package `.air`:
@@ -315,10 +374,28 @@ packages:
 	- perception
 ```
 
+## Image contents and environment toggles
+
+Generated images are intentionally minimal: the base image plus `python3-pip`,
+`git`, the ROS build tool for the selected distro, and the airfield CLI itself
+(installed from your running copy, never from PyPI). Everything else — OpenCV,
+GUI libraries, extra shells — must be declared as dependencies so each package
+only pays for what it uses.
+
+Environment variables that change build/run behavior (each build prints the
+effective settings in an `[airfield] build settings:` line):
+
+- `AIRFIELD_NO_PULL=1` — don't `--pull` the base image; required when `base_image` is a locally-built image that exists in no registry
+- `AIRFIELD_PACKAGES_REPO` — git URL of the shared dependency-manifest repository (default `https://github.com/airfield/packages.git`); set for forks, mirrors, or air-gapped sites
+- `AIRFIELD_REPO` — GitHub `owner/name` slug used for update checks (default `airfield/airfield`)
+- `AIRFIELD_FORCE_DOCKER_CACHE_MOUNTS=1` / `AIRFIELD_DISABLE_DOCKER_CACHE_MOUNTS=1` — override BuildKit cache-mount detection
+- `AIRFIELD_TORCH_INSTALL_TARGET` (or `TORCH_INSTALL_TARGET`), `AIRFIELD_TORCH_VERSION`, `AIRFIELD_TORCH_GPU_WHL_TAG` — PyTorch build args; `gpu` also enables GPU passthrough at run time on non-Jetson hosts (Jetson hosts always get GPU/camera passthrough)
+- `MAKEFLAGS` / `CMAKE_BUILD_PARALLEL_LEVEL` — override the parallelism of the automatic in-container `colcon build` run by `package cmd`/`package run`
+
 ## Notes
 
 - Run commands from inside an Airfield project or one of its subdirectories.
-- `airfield project run` currently runs the selected package's `default` command when present, otherwise it starts an interactive container shell.
+- `airfield project run` currently runs the selected package's `default` command when present, otherwise it starts an interactive container shell. `airfield project run --test` runs the package's `test` command and fails if none is defined.
 
 
 ## Development
@@ -334,5 +411,35 @@ pipx install --force --editable ".[test]"
 To run the test suite in an isolated environment using your local source:
 
 ```bash
-pipx run --no-cache --editable --spec ".[test]" python3 -m pytest
+PIPX_DEFAULT_BACKEND=pip pipx run --no-cache --editable --spec ".[test]" python3 -m pytest --cov=src/airfield
 ```
+
+Alternatively, if you are using `uv`:
+
+```bash
+uv run --no-env-file --extra test pytest --cov=src/airfield
+```
+
+### Release Tagging and Hooks
+
+To ensure update checks work correctly, please tag releases on GitHub after pushing code:
+1. Commit and push your changes.
+2. Tag the release commit (e.g., `git tag v0.1.1`).
+3. Push the tag to GitHub (e.g., `git push origin v0.1.1`).
+
+#### Git Hook
+
+Install the repository's pre-push hook. This hook validates that any version tag being pushed matches the current version declared in the codebase (`src/airfield/__init__.py`), blocking mismatched tag pushes. If pushing a branch, it prints a tagging reminder.
+
+To configure and install the hook:
+
+```bash
+# Configure Git to use the repository's hooks folder (recommended):
+git config core.hooksPath .githooks
+
+# Alternatively, copy and activate the hook script inside your local .git directory:
+cp .githooks/pre-push .git/hooks/pre-push
+chmod +x .git/hooks/pre-push
+```
+
+The `airfield doctor` command checks if this hook is configured when run inside the repository and will report a failure if the hook is inactive or missing.

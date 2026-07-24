@@ -1,0 +1,16 @@
+#!/bin/sh
+# Git post-push hook to remind developers to tag releases
+
+# Print a bright message in yellow/orange color if outputting to a terminal
+if [ -t 1 ]; then
+    YELLOW='\033[1;33m'
+    NC='\033[0m'
+else
+    YELLOW=''
+    NC=''
+fi
+
+printf "\n%b==========================================================%b\n" "$YELLOW" "$NC"
+printf "%bReminder: If this push contains a release, please tag it!%b\n" "$YELLOW" "$NC"
+printf "%b  e.g., git tag vX.Y.Z && git push origin vX.Y.Z%b\n" "$YELLOW" "$NC"
+printf "%b==========================================================%b\n\n" "$YELLOW" "$NC"

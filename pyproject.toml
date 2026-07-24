@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "airfield"
-version = "0.1.0"
+dynamic = ["version"]
 description = "The framework for reproducible robots."
 authors = [{ name = "Nathan Tsoi", email = "nathan@vertile.com" }]
 readme = "README.md"
@@ -22,6 +22,7 @@ dependencies = [
 test = [
     "pytest>=7.0.0",
     "pytest-mock>=3.10.0",
+    "pytest-cov>=4.0.0",
 ]
 
 [project.scripts]
@@ -35,3 +36,6 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 airfield = ["templates/docker/*.j2", "templates/tmux/*.j2"]
+
+[tool.setuptools.dynamic]
+version = {attr = "airfield.__version__"}

@@ -8,6 +8,8 @@ from typing import List, Optional, Tuple
 import typer
 from rich.console import Console
 
+from airfield.config import is_arm_mac
+
 console = Console()
 
 
@@ -32,6 +34,94 @@ def _engine_alias(path: str) -> str:
     return name or "unknown"
 
 
+def _install_container() -> Tuple[bool, str]:
+    import tempfile
+    import urllib.request
+
+    console.print("Resolving latest Apple container tool release from GitHub...")
+    releases_url = "https://api.github.com/repos/apple/container/releases/latest"
+    req = urllib.request.Request(releases_url, headers={"User-Agent": "airfield-doctor"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            assets = data.get("assets", [])
+            pkg_url = None
+            for asset in assets:
+                name = asset.get("name", "")
+                if name.endswith(".pkg"):
+                    pkg_url = asset.get("browser_download_url")
+                    break
+            if not pkg_url:
+                return False, "could not find a .pkg installer asset in the latest GitHub release"
+    except Exception as exc:
+        return False, f"failed to fetch latest GitHub release: {exc}"
+
+    try:
+        temp_dir = Path(tempfile.gettempdir())
+        pkg_path = temp_dir / "apple-container-installer.pkg"
+        console.print(f"Downloading installer from {pkg_url}...")
+        req_dl = urllib.request.Request(pkg_url, headers={"User-Agent": "airfield-doctor"})
+        with urllib.request.urlopen(req_dl) as response, open(pkg_path, "wb") as out_file:
+            shutil.copyfileobj(response, out_file)
+    except Exception as exc:
+        return False, f"failed to download installer: {exc}"
+
+    console.print("Installing Apple container tool (requires administrator privileges)...")
+    result = subprocess.run(["sudo", "installer", "-pkg", str(pkg_path), "-target", "/"], check=False)
+    
+    # Clean up installer
+    try:
+        pkg_path.unlink()
+    except Exception:
+        pass
+
+    if result.returncode != 0:
+        return False, "installer package execution failed"
+
+    container_path = shutil.which("container") or "/usr/local/bin/container"
+    if not Path(container_path).exists():
+        return False, f"container CLI not found at {container_path} after installation"
+
+    console.print("Starting container system service...")
+    result_start = subprocess.run([container_path, "system", "start"], capture_output=True, text=True, check=False)
+    if result_start.returncode != 0:
+        stderr = (result_start.stderr or "").strip()
+        return False, f"container system start failed: {stderr}"
+
+    return True, "Apple container tool installed and system service started"
+
+
+
+def _check_container(auto_fix: bool) -> Tuple[str, str, Optional[str]]:
+    container_path = shutil.which("container")
+    if container_path is None:
+        if _inside_container():
+            return "warn", "Container engine", "container not found in PATH inside container (skipping host engine check)"
+        if auto_fix:
+            ok, msg = _install_container()
+            if ok:
+                return "pass", "Container tool", "installed and system service started successfully"
+            return "fail", "Container CLI", f"container not found in PATH; auto-fix failed: {msg}"
+        return "fail", "Container CLI", "container not found in PATH. Run: airfield system setup"
+
+    result = subprocess.run([container_path, "system", "status"], capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        if _inside_container():
+            return "warn", "Container engine", f"container detected at {container_path}; service query unavailable in container"
+        if auto_fix:
+            result_start = subprocess.run([container_path, "system", "start"], capture_output=True, text=True, check=False)
+            if result_start.returncode == 0:
+                return "pass", "Container tool", "service was stopped but successfully started"
+            stderr = (result_start.stderr or "").strip()
+            return "fail", "Container system service", f"not running, and failed to start: {stderr}"
+
+        stderr = (result.stderr or "").strip()
+        message = stderr.splitlines()[0] if stderr else "container system service is not running"
+        return "fail", "Container system service", f"{message}. Try running: container system start"
+
+    return "pass", "Container tool", f"available at {container_path}"
+
+
 def _check_docker() -> Tuple[str, str, Optional[str]]:
     docker_path = shutil.which("docker")
     if docker_path is None:
@@ -53,6 +143,34 @@ def _check_docker() -> Tuple[str, str, Optional[str]]:
         return "pass", "Container engine", f"{alias} via docker-compatible CLI at {docker_path}"
 
     return "pass", "Docker", f"available at {docker_path}"
+
+
+def _check_git() -> Tuple[str, str, Optional[str]]:
+    git_path = shutil.which("git")
+    if git_path is None:
+        return "fail", "Git", (
+            "git not found in PATH. Airfield needs it to fetch the shared packages "
+            "repository and manage subproject checkouts. Install: apt-get install git"
+        )
+    return "pass", "Git", f"available at {git_path}"
+
+
+def _check_plan_runner() -> Tuple[str, str, Optional[str]]:
+    """tmux + tmuxinator are only needed for `project up` plan launches, so
+    missing tools warn (with install hints) rather than fail."""
+    tmux_path = shutil.which("tmux")
+    tmuxinator_path = shutil.which("tmuxinator")
+    if tmux_path and tmuxinator_path:
+        return "pass", "Plan runner", f"tmux at {tmux_path}; tmuxinator at {tmuxinator_path}"
+
+    missing = []
+    if tmux_path is None:
+        missing.append("tmux (install: apt-get install tmux)")
+    if tmuxinator_path is None:
+        missing.append("tmuxinator (install: apt-get install tmuxinator, or gem install tmuxinator)")
+    return "warn", "Plan runner", (
+        f"`airfield project up` will not work until installed: {'; '.join(missing)}"
+    )
 
 
 def _detect_cuda_version() -> Optional[str]:
@@ -314,6 +432,53 @@ def _check_shell_completion(auto_fix: bool) -> Tuple[str, str, Optional[str]]:
     )
 
 
+def _check_airfield_update() -> Tuple[str, str, Optional[str]]:
+    try:
+        from airfield.cli.tools_system import check_for_update
+        res = check_for_update(timeout=3)
+        if res is None:
+            return "warn", "Airfield update", "unable to check for updates"
+        cur = res.get("current_version")
+        latest = res.get("latest_version")
+        if res.get("newer"):
+            return "warn", "Airfield update", f"update available: {cur} → {latest}. Run: airfield system update"
+        return "pass", "Airfield update", f"up-to-date ({cur})"
+    except Exception as exc:
+        return "warn", "Airfield update", f"failed to check for updates: {exc}"
+
+
+def _check_git_hook() -> Optional[Tuple[str, str, Optional[str]]]:
+    # Check if this file is running within the airfield development repository
+    repo_root = Path(__file__).resolve().parent.parent.parent.parent
+    githooks_dir = repo_root / ".githooks"
+    if not githooks_dir.exists():
+        return None
+
+    # Only check hook setup if the command is run from inside the airfield repository directory
+    try:
+        cwd = Path.cwd().resolve()
+        cwd.relative_to(repo_root)
+    except ValueError:
+        return None
+    except Exception:
+        return None
+
+    # Check if core.hooksPath is set to .githooks or if pre-push script is in .git/hooks
+    try:
+        result = subprocess.run(["git", "config", "core.hooksPath"], capture_output=True, text=True, check=False)
+        hooks_path = result.stdout.strip()
+        if hooks_path == ".githooks":
+            return "pass", "Git push hook", "installed (core.hooksPath set to .githooks)"
+    except Exception:
+        pass
+
+    pre_push_git = repo_root / ".git" / "hooks" / "pre-push"
+    if pre_push_git.exists() and os.access(pre_push_git, os.X_OK):
+        return "pass", "Git push hook", "installed (pre-push script present in .git/hooks)"
+
+    return "fail", "Git push hook", "not installed. Run: git config core.hooksPath .githooks"
+
+
 def _print_result(status: str, name: str, detail: Optional[str]) -> None:
     if status == "pass":
         prefix = "[green]PASS[/green]"
@@ -334,7 +499,21 @@ def run(
     """Check Airfield system dependencies and shell integration."""
     results: List[Tuple[str, str, Optional[str]]] = []
 
-    results.append(_check_docker())
+    # Check for CLI updates first
+    results.append(_check_airfield_update())
+
+    # Check for developers' git hook status if within the repo
+    hook_res = _check_git_hook()
+    if hook_res is not None:
+        results.append(hook_res)
+
+    if is_arm_mac():
+        results.append(_check_container(auto_fix=fix))
+    else:
+        results.append(_check_docker())
+    results.append(_check_git())
+    if not _inside_container():
+        results.append(_check_plan_runner())
     results.append(_check_shell_completion(auto_fix=fix))
     results.append(_check_gpu_accelerator())
     # Only probe PyTorch when running inside a container environment where

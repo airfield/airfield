@@ -3,21 +3,25 @@ import subprocess
 from typing import List, Optional
 
 import typer
+from airfield.config import is_arm_mac, is_arm64
 
 from airfield.cli.package_exec import (
     build_package_image,
     container_workdir,
     docker_mount_args,
+    entry_wrap_args,
+    find_shared_package_definition,
     gpu_runtime_args,
     in_airfield_container,
     resolve_package_context,
+    run_container_foreground,
 )
 
 
 def run(
     package_name: Optional[str] = typer.Argument(None, help="Package name/path (or first word of command if inside a package)"),
     command: Optional[List[str]] = typer.Argument(None, help="Command to execute inside the package container"),
-    target_device: str = typer.Option("x86_64", "--target-device", help="Target architecture for dependency resolution"),
+    target_device: str = typer.Option("arm64" if is_arm64() else "x86_64", "--target-device", help="Target architecture for dependency resolution"),
 ):
     """Run a command directly in the package container with source mounted."""
     if in_airfield_container():
@@ -43,11 +47,17 @@ def run(
             if candidate.exists() and (candidate / AIRFIELD_CONFIG).exists():
                 is_valid_package = True
             else:
-                from airfield.config import find_project_root, packages_dir
+                from airfield.config import dependency_search_paths, find_project_root, packages_dir
                 root = find_project_root()
                 if root:
                     pkg_dir_candidate = packages_dir(root) / package_name
                     if pkg_dir_candidate.exists():
+                        is_valid_package = True
+                    elif find_shared_package_definition(
+                        package_name, dependency_search_paths(root, target_device)
+                    ) is not None:
+                        # Shared package definition in the packages repo; it
+                        # will be materialized by resolve_package_context.
                         is_valid_package = True
 
             if not is_valid_package:
@@ -64,22 +74,35 @@ def run(
     pkg_dir, pkg, deps, source_root = resolve_package_context(package_name, target_device=target_device)
     image_name = build_package_image(pkg_dir, pkg, deps, target_device=target_device)
 
-    mount_args = docker_mount_args(pkg_dir, pkg, source_root)
+    mount_args = docker_mount_args(pkg_dir, pkg, source_root, target_device)
     runtime_gpu_args = gpu_runtime_args()
     command_text = shlex.join(command)
+    entry_env_args, container_cmd = entry_wrap_args(pkg, command_text)
     print(f"Build successful. Running command in {image_name}: {command_text}")
 
-    run_cmd = [
-        "docker", "run", "--rm",
-        "--group-add", "0",
-        "--ipc=host", "--network=host",
-        *mount_args,
-        "-w", container_workdir(pkg),
-        *runtime_gpu_args,
-        image_name,
-        "/bin/bash", "-lc", command_text,
-    ]
+    if is_arm_mac():
+        run_cmd = [
+            "container", "run", "--rm",
+            *mount_args,
+            *entry_env_args,
+            "-w", container_workdir(pkg),
+            *runtime_gpu_args,
+            image_name,
+            *container_cmd,
+        ]
+    else:
+        run_cmd = [
+            "docker", "run", "--rm",
+            "--group-add", "0",
+            "--ipc=host", "--network=host",
+            *mount_args,
+            *entry_env_args,
+            "-w", container_workdir(pkg),
+            *runtime_gpu_args,
+            image_name,
+            *container_cmd,
+        ]
 
-    result = subprocess.run(run_cmd)
-    if result.returncode != 0:
-        raise typer.Exit(result.returncode)
+    returncode = run_container_foreground(run_cmd)
+    if returncode != 0:
+        raise typer.Exit(returncode)

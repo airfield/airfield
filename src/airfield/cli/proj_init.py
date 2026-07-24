@@ -57,25 +57,33 @@ def run(
     (project_root / "dependencies" / "arm64").mkdir(parents=True, exist_ok=True)
     (project_root / "plans").mkdir(parents=True, exist_ok=True)
 
+    # No default_target_device field: commands detect the host arch, which is
+    # correct when the same project checkout is used on both a dev laptop and
+    # the robot. Cross-builds use the explicit --target-device flag.
     marker_data = {
         "kind": "project",
         "name": project_root.name,
         "version": "0.1.0",
         "ros_distro": ros_distro,
-        "default_target_device": "x86_64",
     }
     marker_path.write_text(yaml.safe_dump(marker_data, sort_keys=False), encoding="utf-8")
 
 
     _write_if_missing(
         project_root / "plans" / "example.yaml",
-        yaml.safe_dump(
-            {
-                "name": "example",
-                "packages": [],
-            },
-            sort_keys=False,
-        ),
+        """# Airfield plan: `airfield project up example` compiles this into a
+# tmuxinator session. Each window is a tmux window; each pane runs a command.
+# A pane with a `package:` key runs its `cmd` inside that package's container.
+name: example
+windows:
+  - name: hello
+    layout: main-vertical
+    panes:
+      - echo "Hello from plan 'example'. Replace these panes with launch commands."
+      # Run a command inside a package's container:
+      # - package: my_package
+      #   cmd: ros2 launch my_package bringup.launch.py
+""",
     )
 
     _write_if_missing(
