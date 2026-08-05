@@ -465,9 +465,76 @@ def _validate_and_configure_host_dependencies(pkg: Package, deps: List[Dependenc
         raise typer.Exit(1)
 
 
-def container_source_mount_path(package_name: str) -> str:
+def container_home() -> str:
+    """In-container HOME. ``builder.py`` creates the container user from the
+    host's login name and sets ``ENV HOME=/home/$USERNAME``, so this mirrors it."""
     username = pwd.getpwuid(os.getuid()).pw_name
-    return f"/home/{username}/workspace/src/{package_name}"
+    return f"/home/{username}"
+
+
+def container_source_mount_path(package_name: str) -> str:
+    return f"{container_home()}/workspace/src/{package_name}"
+
+
+# The colcon workspace dirs that must outlive a single container. Containers run
+# with `--rm`, so anything not mounted is discarded when the pane exits.
+SHARED_WORKSPACE_DIRS = ("build", "install", "log")
+
+
+def host_workspace_root() -> Optional[Path]:
+    """Host directory backing the container's ``~/workspace``.
+
+    Defaults to ``$HOME/workspace``, mirroring the container layout. Set
+    ``AIRFIELD_WORKSPACE`` to relocate it, or to ``none``/empty to opt out and
+    get a throwaway per-container workspace (see ``shared_workspace_mounts``).
+    """
+    override = os.environ.get("AIRFIELD_WORKSPACE")
+    if override is None:
+        return Path.home() / "workspace"
+    override = override.strip()
+    if not override or override.lower() == "none":
+        return None
+    return Path(override).expanduser()
+
+
+def shared_workspace_mounts() -> List[Tuple[Path, str]]:
+    """Host->container mounts that persist ``~/workspace/{build,install,log}``.
+
+    Without these the workspace is container-local, and because every run path
+    uses ``docker run --rm`` it is destroyed when the pane exits. Two things
+    then break at once, both silently:
+
+    1. Every pane recompiles from scratch — the entry script's
+       "already built?" check (``[ ! -e install/$pkg ]``) can never see another
+       container's output.
+    2. The build serialization is defeated. The entry script serializes
+       concurrent builds on ``log/.airfield_build.lock``, which only holds panes
+       back because they all lock the same file. With a container-local ``log/``
+       each pane gets a private copy, so every lock succeeds immediately, no pane
+       ever waits, and they all compile at once — which is what OOM-reboots
+       memory-lean hosts like a Jetson.
+
+    Nothing here is host-specific (the paths are ``$HOME``-relative and identical
+    on every machine), so this belongs in core rather than in per-machine
+    ``.air`` config that a fresh clone does not have.
+
+    The dirs are created host-side when missing: docker would otherwise create
+    them itself as root, leaving the container's non-root user unable to write.
+    """
+    root = host_workspace_root()
+    if root is None:
+        return []
+
+    mounts: List[Tuple[Path, str]] = []
+    for name in SHARED_WORKSPACE_DIRS:
+        host_dir = root / name
+        try:
+            host_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            print(f"[WARN] Skipping shared workspace mount '{host_dir}': {exc}")
+            continue
+        mounts.append((host_dir, f"{container_home()}/workspace/{name}"))
+    return mounts
 
 
 def container_workdir(pkg: Package) -> str:
@@ -583,6 +650,19 @@ def docker_mount_args(pkg_dir: Path, pkg: Package, source_root: Path, target_dev
     mount_args.extend(["-v", f"{source_root}:{container_src}"])
 
     seen_mounts = {str(source_root)}
+    # Container destinations are tracked separately: docker fails the whole run
+    # with "Duplicate mount point" if two -v args target the same path, which is
+    # reachable when a pre-existing .air already lists the workspace dirs below.
+    seen_targets = {container_src}
+
+    # Persist the colcon workspace across containers (build once, launch many)
+    # and give the entry script's build lock a shared file to serialize on.
+    for host_dir, container_dir in shared_workspace_mounts():
+        if str(host_dir) in seen_mounts or container_dir in seen_targets:
+            continue
+        mount_args.extend(["-v", f"{host_dir}:{container_dir}"])
+        seen_mounts.add(str(host_dir))
+        seen_targets.add(container_dir)
 
     # Mount peer-package sources (custom deps built from source, e.g. amrl_msgs)
     # so colcon can build them alongside this package via --packages-up-to.
@@ -591,10 +671,12 @@ def docker_mount_args(pkg_dir: Path, pkg: Package, source_root: Path, target_dev
         for peer_name, peer_src in _collect_peer_source_mounts(
             pkg, root, dependency_search_paths(root, target_device)
         ):
+            peer_target = container_source_mount_path(peer_name)
             if str(peer_src) in seen_mounts or not peer_src.exists():
                 continue
-            mount_args.extend(["-v", f"{peer_src}:{container_source_mount_path(peer_name)}"])
+            mount_args.extend(["-v", f"{peer_src}:{peer_target}"])
             seen_mounts.add(str(peer_src))
+            seen_targets.add(peer_target)
 
     for mount in _configured_mounts(pkg_dir):
         mount_path = Path(_expand_mount_vars(mount)).expanduser()
@@ -604,7 +686,7 @@ def docker_mount_args(pkg_dir: Path, pkg: Package, source_root: Path, target_dev
             mount_path = mount_path.resolve()
 
         mount_str = str(mount_path)
-        if mount_str in seen_mounts:
+        if mount_str in seen_mounts or mount_str in seen_targets:
             continue
 
         if not mount_path.exists():
@@ -615,6 +697,7 @@ def docker_mount_args(pkg_dir: Path, pkg: Package, source_root: Path, target_dev
         # calibration file); only nonexistent paths are skipped.
         mount_args.extend(["-v", f"{mount_path}:{mount_path}"])
         seen_mounts.add(mount_str)
+        seen_targets.add(mount_str)
 
     # Pass through declared host devices (e.g. VESC serial /dev/ttyACM0, joystick
     # /dev/input/js0) and supplementary groups (e.g. dialout) so nodes can access

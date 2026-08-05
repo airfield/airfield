@@ -419,3 +419,107 @@ def test_resolve_package_context_anchors_project_on_the_package(project_with_pee
     assert pkg.name == "main"
     assert deps == [], "peer is built from source, so it contributes no dependency manifest"
     assert source_root == project_with_peer / "packages" / "main" / "src"
+
+
+# --- shared colcon workspace: ~/workspace/{build,install,log} survives --rm ---
+
+@pytest.fixture
+def fake_home(tmp_path, monkeypatch):
+    """Isolate $HOME so workspace mounts resolve under tmp_path rather than
+    creating directories in the developer's real home."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("AIRFIELD_WORKSPACE", raising=False)
+    return home
+
+
+def _mount_targets(args):
+    """Container-side destinations from a `-v host:container` argument list."""
+    return [val.split(":", 1)[1] for flag, val in zip(args, args[1:]) if flag == "-v"]
+
+
+def test_workspace_is_shared_without_any_air_config(temp_workspace, fake_home):
+    """The fresh-clone case: no .air anywhere. Core must still persist
+    build/install/log. Otherwise the workspace dies with the --rm container, so
+    every pane recompiles AND the entry script's build lock
+    (log/.airfield_build.lock) is private to each container -- panes then all
+    compile concurrently, which OOM-reboots a memory-lean host."""
+    from airfield.cli.package_exec import container_home, docker_mount_args
+
+    pkg_dir = temp_workspace / "pkg"
+    pkg_dir.mkdir()
+    assert not (pkg_dir / ".air").exists(), "fixture must model a clone with no local config"
+
+    args = docker_mount_args(pkg_dir, Package(name="p"), pkg_dir, "x86_64")
+    joined = " ".join(args)
+    for name in ("build", "install", "log"):
+        assert f"{fake_home}/workspace/{name}:{container_home()}/workspace/{name}" in joined
+
+
+def test_workspace_dirs_are_created_when_missing(temp_workspace, fake_home):
+    """Docker creates a missing -v source itself, but as root -- which leaves the
+    container's non-root user unable to write into its own workspace."""
+    from airfield.cli.package_exec import docker_mount_args
+
+    pkg_dir = temp_workspace / "pkg"
+    pkg_dir.mkdir()
+    assert not (fake_home / "workspace").exists()
+
+    docker_mount_args(pkg_dir, Package(name="p"), pkg_dir, "x86_64")
+
+    for name in ("build", "install", "log"):
+        assert (fake_home / "workspace" / name).is_dir()
+
+
+def test_air_listing_workspace_does_not_duplicate_the_mount(temp_workspace, fake_home):
+    """Machines set up before this moved into core still list the workspace dirs
+    in .air. Two -v args on one destination make docker fail the whole run with
+    "Duplicate mount point", so the pre-existing entry must collapse into one."""
+    from airfield.cli.package_exec import container_home, docker_mount_args
+
+    pkg_dir = temp_workspace / "pkg"
+    pkg_dir.mkdir()
+    (pkg_dir / ".air").write_text(
+        "mounts:\n  - ~/workspace/build\n  - ~/workspace/install\n  - ~/workspace/log\n",
+        encoding="utf-8",
+    )
+
+    args = docker_mount_args(pkg_dir, Package(name="p"), pkg_dir, "x86_64")
+    targets = _mount_targets(args)
+
+    assert len(targets) == len(set(targets)), f"duplicate mount destination in {targets}"
+    for name in ("build", "install", "log"):
+        assert targets.count(f"{container_home()}/workspace/{name}") == 1
+
+
+def test_workspace_sharing_can_be_opted_out(temp_workspace, fake_home, monkeypatch):
+    """AIRFIELD_WORKSPACE=none restores throwaway per-container workspaces, for
+    hosts that want isolation over reuse."""
+    from airfield.cli.package_exec import docker_mount_args
+
+    monkeypatch.setenv("AIRFIELD_WORKSPACE", "none")
+    pkg_dir = temp_workspace / "pkg"
+    pkg_dir.mkdir()
+
+    args = docker_mount_args(pkg_dir, Package(name="p"), pkg_dir, "x86_64")
+
+    assert "workspace/install" not in " ".join(args)
+    assert not (fake_home / "workspace").exists(), "opted out: nothing created on the host"
+
+
+def test_workspace_root_can_be_relocated(temp_workspace, fake_home, monkeypatch):
+    """AIRFIELD_WORKSPACE=<path> repoints the host side, so two projects on one
+    machine can keep separate install/ trees instead of colliding on package names."""
+    from airfield.cli.package_exec import container_home, docker_mount_args
+
+    alt = temp_workspace / "alt_ws"
+    monkeypatch.setenv("AIRFIELD_WORKSPACE", str(alt))
+    pkg_dir = temp_workspace / "pkg"
+    pkg_dir.mkdir()
+
+    args = docker_mount_args(pkg_dir, Package(name="p"), pkg_dir, "x86_64")
+    joined = " ".join(args)
+
+    assert f"{alt}/install:{container_home()}/workspace/install" in joined
+    assert f"{fake_home}/workspace" not in joined

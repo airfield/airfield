@@ -3,6 +3,17 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+@pytest.fixture(autouse=True)
+def isolate_shared_workspace(tmp_path, monkeypatch):
+    """Keep the shared colcon workspace out of the developer's real home.
+
+    ``docker_mount_args`` creates ``$HOME/workspace/{build,install,log}`` so the
+    container's non-root user can write there. Point that at a tmp dir for every
+    test; the tests that exercise the default location clear this and patch HOME.
+    """
+    monkeypatch.setenv("AIRFIELD_WORKSPACE", str(tmp_path / "shared_ws"))
+
+
 @pytest.fixture
 def cli_runner():
     return CliRunner()
