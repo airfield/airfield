@@ -421,7 +421,11 @@ def test_resolve_package_context_anchors_project_on_the_package(project_with_pee
     assert source_root == project_with_peer / "packages" / "main" / "src"
 
 
-# --- shared colcon workspace: ~/workspace/{build,install,log} survives --rm ---
+# --- shared colcon workspace: build/install/log survive the --rm container ---
+#
+# The tests below that use a bare `pkg_dir` model a package with no project
+# around it, which is the $HOME/workspace fallback. Project scoping (the
+# default) is covered separately at the end of this section.
 
 @pytest.fixture
 def fake_home(tmp_path, monkeypatch):
@@ -509,8 +513,8 @@ def test_workspace_sharing_can_be_opted_out(temp_workspace, fake_home, monkeypat
 
 
 def test_workspace_root_can_be_relocated(temp_workspace, fake_home, monkeypatch):
-    """AIRFIELD_WORKSPACE=<path> repoints the host side, so two projects on one
-    machine can keep separate install/ trees instead of colliding on package names."""
+    """AIRFIELD_WORKSPACE=<path> repoints the host side, which is also how
+    several projects can deliberately share one build tree."""
     from airfield.cli.package_exec import container_home, docker_mount_args
 
     alt = temp_workspace / "alt_ws"
@@ -523,3 +527,80 @@ def test_workspace_root_can_be_relocated(temp_workspace, fake_home, monkeypatch)
 
     assert f"{alt}/install:{container_home()}/workspace/install" in joined
     assert f"{fake_home}/workspace" not in joined
+
+
+def _project(root: Path, pkg_name: str) -> Path:
+    """A minimal project containing one package, returning the package dir."""
+    pkg_dir = root / "packages" / pkg_name
+    (pkg_dir / "src").mkdir(parents=True)
+    (root / "airfield.yaml").write_text(f"kind: project\nname: {root.name}\n", encoding="utf-8")
+    (pkg_dir / "airfield.yaml").write_text(f"name: {pkg_name}\nsource_path: src\n", encoding="utf-8")
+    return pkg_dir
+
+
+def test_workspace_is_scoped_to_the_project(temp_workspace, fake_home):
+    """The default root is <project>/.airfield/workspace, not a machine-wide
+    directory. .airfield/ is already gitignored by `project init`, so build
+    output stays out of version control without extra setup."""
+    from airfield.cli.package_exec import container_home, docker_mount_args
+
+    pkg_dir = _project(temp_workspace / "proj", "base_driver")
+
+    args = docker_mount_args(pkg_dir, Package(name="base_driver"), pkg_dir / "src", "x86_64")
+    joined = " ".join(args)
+
+    ws = temp_workspace / "proj" / ".airfield" / "workspace"
+    for name in ("build", "install", "log"):
+        assert f"{ws}/{name}:{container_home()}/workspace/{name}" in joined
+        assert (ws / name).is_dir()
+    assert not (fake_home / "workspace").exists(), "must not fall back to $HOME inside a project"
+
+
+def test_two_projects_do_not_share_a_workspace(temp_workspace, fake_home):
+    """The bug this scoping prevents: two projects that both define a package
+    called `base_driver` would otherwise resolve to one install/base_driver, and
+    the second project's entry script would find the name already built, skip
+    the build, and source the first project's binaries."""
+    from airfield.cli.package_exec import docker_mount_args
+
+    a = _project(temp_workspace / "proj_a", "base_driver")
+    b = _project(temp_workspace / "proj_b", "base_driver")
+
+    args_a = docker_mount_args(a, Package(name="base_driver"), a / "src", "x86_64")
+    args_b = docker_mount_args(b, Package(name="base_driver"), b / "src", "x86_64")
+
+    def install_source(args):
+        return [v.split(":", 1)[0] for f, v in zip(args, args[1:])
+                if f == "-v" and v.split(":", 1)[1].endswith("/workspace/install")]
+
+    assert install_source(args_a) != install_source(args_b)
+    assert install_source(args_a) == [str(temp_workspace / "proj_a" / ".airfield" / "workspace" / "install")]
+
+
+def test_project_scoping_is_anchored_on_the_package_not_the_cwd(temp_workspace, fake_home, monkeypatch):
+    """Panes run `airfield package cmd` from wherever tmux put them, so resolving
+    the root from the CWD would give one package two different workspaces."""
+    from airfield.cli.package_exec import docker_mount_args
+
+    pkg_dir = _project(temp_workspace / "proj", "base_driver")
+    outside = temp_workspace / "elsewhere"
+    outside.mkdir()
+    monkeypatch.chdir(outside)
+
+    args = docker_mount_args(pkg_dir, Package(name="base_driver"), pkg_dir / "src", "x86_64")
+
+    ws = temp_workspace / "proj" / ".airfield" / "workspace"
+    assert f"{ws}/install" in " ".join(args)
+
+
+def test_env_override_still_wins_inside_a_project(temp_workspace, fake_home, monkeypatch):
+    """Opting out has to work in a project too, since that is where plans run."""
+    from airfield.cli.package_exec import docker_mount_args
+
+    pkg_dir = _project(temp_workspace / "proj", "base_driver")
+    monkeypatch.setenv("AIRFIELD_WORKSPACE", "none")
+
+    args = docker_mount_args(pkg_dir, Package(name="base_driver"), pkg_dir / "src", "x86_64")
+
+    assert "workspace/install" not in " ".join(args)
+    assert not (temp_workspace / "proj" / ".airfield").exists()

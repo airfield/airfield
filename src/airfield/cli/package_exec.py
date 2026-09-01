@@ -481,23 +481,40 @@ def container_source_mount_path(package_name: str) -> str:
 SHARED_WORKSPACE_DIRS = ("build", "install", "log")
 
 
-def host_workspace_root() -> Optional[Path]:
+def host_workspace_root(project_root: Optional[Path] = None) -> Optional[Path]:
     """Host directory backing the container's ``~/workspace``.
 
-    Defaults to ``$HOME/workspace``, mirroring the container layout. Set
-    ``AIRFIELD_WORKSPACE`` to relocate it, or to ``none``/empty to opt out and
-    get a throwaway per-container workspace (see ``shared_workspace_mounts``).
+    Scoped to the project: ``<project>/.airfield/workspace``. One machine-wide
+    workspace would let unrelated projects share build output by package name.
+    Two projects that each define a ``base_driver`` would resolve to one
+    ``install/base_driver``, so the second project's entry script finds the name
+    already built, skips the build, and silently sources the first project's
+    binaries. Scoping the root makes that unrepresentable rather than
+    documented.
+
+    ``.airfield/`` is already the project's scratch directory (``project up``
+    writes tmuxinator configs there) and ``project init`` adds it to
+    ``.gitignore``, so build output stays out of version control by default.
+
+    Packages outside any project have no root to scope to and fall back to
+    ``$HOME/workspace``. Set ``AIRFIELD_WORKSPACE`` to an absolute path to
+    relocate the root, which is also how several projects can deliberately
+    share one, or to ``none``/empty to opt out and get a throwaway
+    per-container workspace (see ``shared_workspace_mounts``).
     """
     override = os.environ.get("AIRFIELD_WORKSPACE")
-    if override is None:
-        return Path.home() / "workspace"
-    override = override.strip()
-    if not override or override.lower() == "none":
-        return None
-    return Path(override).expanduser()
+    if override is not None:
+        override = override.strip()
+        if not override or override.lower() == "none":
+            return None
+        return Path(override).expanduser()
+
+    if project_root is not None:
+        return project_root / ".airfield" / "workspace"
+    return Path.home() / "workspace"
 
 
-def shared_workspace_mounts() -> List[Tuple[Path, str]]:
+def shared_workspace_mounts(project_root: Optional[Path] = None) -> List[Tuple[Path, str]]:
     """Host->container mounts that persist ``~/workspace/{build,install,log}``.
 
     Without these the workspace is container-local, and because every run path
@@ -514,14 +531,14 @@ def shared_workspace_mounts() -> List[Tuple[Path, str]]:
        ever waits, and they all compile at once — which is what OOM-reboots
        memory-lean hosts like a Jetson.
 
-    Nothing here is host-specific (the paths are ``$HOME``-relative and identical
-    on every machine), so this belongs in core rather than in per-machine
-    ``.air`` config that a fresh clone does not have.
+    The location is derived (from the project root, or ``$HOME`` for a
+    standalone package), never configured, so this belongs in core rather than
+    in per-machine ``.air`` config that a fresh clone does not have.
 
     The dirs are created host-side when missing: docker would otherwise create
     them itself as root, leaving the container's non-root user unable to write.
     """
-    root = host_workspace_root()
+    root = host_workspace_root(project_root)
     if root is None:
         return []
 
@@ -655,9 +672,13 @@ def docker_mount_args(pkg_dir: Path, pkg: Package, source_root: Path, target_dev
     # reachable when a pre-existing .air already lists the workspace dirs below.
     seen_targets = {container_src}
 
+    # Anchored on the package, not the CWD, so both the workspace root and the
+    # peer mounts below resolve the same way wherever the command is invoked.
+    root = find_project_root(pkg_dir)
+
     # Persist the colcon workspace across containers (build once, launch many)
     # and give the entry script's build lock a shared file to serialize on.
-    for host_dir, container_dir in shared_workspace_mounts():
+    for host_dir, container_dir in shared_workspace_mounts(root):
         if str(host_dir) in seen_mounts or container_dir in seen_targets:
             continue
         mount_args.extend(["-v", f"{host_dir}:{container_dir}"])
@@ -666,7 +687,6 @@ def docker_mount_args(pkg_dir: Path, pkg: Package, source_root: Path, target_dev
 
     # Mount peer-package sources (custom deps built from source, e.g. amrl_msgs)
     # so colcon can build them alongside this package via --packages-up-to.
-    root = find_project_root(pkg_dir)
     if root is not None:
         for peer_name, peer_src in _collect_peer_source_mounts(
             pkg, root, dependency_search_paths(root, target_device)
