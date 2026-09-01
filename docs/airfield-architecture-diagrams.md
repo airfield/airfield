@@ -1,4 +1,4 @@
-# Airfield architecture diagrams (ICRA paper)
+# Airfield architecture diagrams (IROS paper)
 
 ASCII wireframes / mappings to be redrawn in Canva. Two figures:
 
