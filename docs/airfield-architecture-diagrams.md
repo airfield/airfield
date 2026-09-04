@@ -201,11 +201,30 @@ my_robot/                             ◄── PROJECT  (airfield.yaml, kind: p
                         FROM <base_image>                       airfield-pkg-<name>
                         (pkg base_image → else project base_image → else ROS default)
                         + apt + colcon, install the airfield CLI,
-                          run dep `system:` (apt) then `user:` (pip) commands,
+                          record the pip conflict baseline (base image state),
+                          ONE batched `apt-get install` of every dep's `apt:`,
+                          then dep `system:` commands (as root),
                           matching host user + ~/workspace/src,
+                          ONE batched `pip install` of every dep's `pip:` specs,
+                          then dep `user:` commands (custom index, GPU branch),
+                          `pip check` vs the baseline → fail on NEW conflicts,
                           source ROS + workspace install in shell rc,
                           COPY /opt/airfield-entry.sh
 ```
+
+Every `pip:` requirement across all dependencies goes into a single
+`pip install` so pip's resolver sees them together. Separate installs each
+solve in isolation and silently overwrite each other's versions while still
+exiting 0, which yields a green build and an image that fails at runtime.
+`apt:` is batched for the same reason and one more: apt given `-y` resolves a
+genuine conflict by REMOVING the other package (exit 0, and the result is
+dependency-consistent because nothing is broken -- something is missing), while
+one combined install fails loudly. It also collapses one index refresh per
+dependency into one per package. The
+closing `pip check` covers the seams the batch cannot reach — apt-installed
+Python packages, manifests running their own pip command, and the base image —
+and is baselined so a conflict inherited from a vendor base image does not fail
+the build.
 
 ### Launch time  ( `airfield project up <plan>` )
 
