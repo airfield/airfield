@@ -180,7 +180,9 @@ my_robot/                             ◄── PROJECT  (airfield.yaml, kind: p
 
 
 ~/workspace/{build,install,log}       ◄── SHARED colcon workspace, mounted
-                                      same-path into EVERY container (via .air).
+                                      same-path into EVERY container by
+                                      airfield itself (host side lives at
+                                      <project>/.airfield/workspace).
                                       Built ONCE → panes only source + launch.
                                       This is "build once, launch many."
 ```
