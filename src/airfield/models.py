@@ -157,6 +157,11 @@ class Package(BaseModel):
     source_path: str = "src"
     ros_distro: Optional[str] = None
     base_image: Optional[str] = None
+    # Whether `docker build` refreshes the base image from its registry
+    # (`--pull`). None = not set here: inherit the project's setting when this
+    # package inherits the project's base_image, else pull. Set false for a
+    # base image that is built locally and exists in no registry.
+    pull_base_image: Optional[bool] = None
     # Extra args appended to the auto `colcon build` run by the container entry
     # wrapper, e.g. "--cmake-args -DCMAKE_BUILD_MODE=Hardware".
     colcon_args: Optional[str] = None

@@ -134,46 +134,158 @@ def test_package_cmd_implicit(cli_runner, mock_package_context, mock_docker, moc
     assert called_args[-3:] == ["/bin/bash", "-lc", "echo hello"]
 
 
-def _make_project_with_package(tmp_path, *, project_base=None, package_base=None):
+def _make_project_with_package(tmp_path, *, project_base=None, package_base=None,
+                               project_pull=None, package_pull=None):
     proj = "kind: project\nname: proj\n"
     if project_base:
         proj += f"base_image: {project_base}\n"
+    if project_pull is not None:
+        proj += f"pull_base_image: {project_pull}\n"
     (tmp_path / "airfield.yaml").write_text(proj, encoding="utf-8")
     pkg_dir = tmp_path / "packages" / "p"
     pkg_dir.mkdir(parents=True)
     pkgcfg = "kind: package\nname: p\n"
     if package_base:
         pkgcfg += f"base_image: {package_base}\n"
+    if package_pull is not None:
+        pkgcfg += f"pull_base_image: {package_pull}\n"
     (pkg_dir / "airfield.yaml").write_text(pkgcfg, encoding="utf-8")
     return pkg_dir
 
 
 def test_project_default_base_image_inherited(tmp_path):
     """A package without base_image inherits the project-level default."""
-    from airfield.cli.package_exec import _apply_project_default_base_image
+    from airfield.cli.package_exec import _apply_project_base_image_defaults
     pkg_dir = _make_project_with_package(tmp_path, project_base="my/base:1")
     pkg = Package(name="p")
     assert pkg.base_image is None
-    _apply_project_default_base_image(pkg, pkg_dir)
+    _apply_project_base_image_defaults(pkg, pkg_dir)
     assert pkg.base_image == "my/base:1"
 
 
 def test_project_default_base_image_does_not_override_explicit(tmp_path):
     """An explicit per-package base_image wins over the project default."""
-    from airfield.cli.package_exec import _apply_project_default_base_image
+    from airfield.cli.package_exec import _apply_project_base_image_defaults
     pkg_dir = _make_project_with_package(tmp_path, project_base="my/base:1")
     pkg = Package(name="p", base_image="explicit/base:2")
-    _apply_project_default_base_image(pkg, pkg_dir)
+    _apply_project_base_image_defaults(pkg, pkg_dir)
     assert pkg.base_image == "explicit/base:2"
 
 
 def test_project_default_base_image_absent_leaves_none(tmp_path):
     """No project default and no package value -> base_image stays None (ROS/ubuntu fallback)."""
-    from airfield.cli.package_exec import _apply_project_default_base_image
+    from airfield.cli.package_exec import _apply_project_base_image_defaults
     pkg_dir = _make_project_with_package(tmp_path, project_base=None)
     pkg = Package(name="p")
-    _apply_project_default_base_image(pkg, pkg_dir)
+    _apply_project_base_image_defaults(pkg, pkg_dir)
     assert pkg.base_image is None
+
+
+# --- pull_base_image ------------------------------------------------------
+
+def _load_with_defaults(pkg_dir):
+    from airfield.cli.package_exec import _apply_project_base_image_defaults
+    pkg = Package.load(pkg_dir / "airfield.yaml")
+    _apply_project_base_image_defaults(pkg, pkg_dir)
+    return pkg
+
+
+def test_pull_base_image_unset_everywhere_stays_none(tmp_path):
+    """Neither file mentions it -> None, which the builder treats as 'pull'."""
+    pkg = _load_with_defaults(_make_project_with_package(tmp_path, project_base="local/base:1"))
+    assert pkg.pull_base_image is None
+
+
+def test_project_pull_base_image_inherited_with_project_base(tmp_path):
+    """The roboracer case: project base is local-only, packages inherit both."""
+    pkg = _load_with_defaults(
+        _make_project_with_package(tmp_path, project_base="local/base:1", project_pull="false")
+    )
+    assert pkg.base_image == "local/base:1"
+    assert pkg.pull_base_image is False
+
+
+def test_project_pull_base_image_not_inherited_by_package_with_own_base(tmp_path):
+    """A package naming its own (registry) image must keep pulling it, even
+    though the project's own base is local-only."""
+    pkg = _load_with_defaults(
+        _make_project_with_package(
+            tmp_path, project_base="local/base:1", project_pull="false", package_base="ros:jazzy-ros-base"
+        )
+    )
+    assert pkg.base_image == "ros:jazzy-ros-base"
+    assert pkg.pull_base_image is None
+
+
+def test_package_with_own_local_base_can_opt_out_itself(tmp_path):
+    pkg = _load_with_defaults(
+        _make_project_with_package(tmp_path, package_base="my/local:2", package_pull="false")
+    )
+    assert pkg.pull_base_image is False
+
+
+@pytest.mark.parametrize("package_pull,expected", [("true", True), ("false", False)])
+def test_package_pull_base_image_wins_over_project(tmp_path, package_pull, expected):
+    pkg = _load_with_defaults(
+        _make_project_with_package(
+            tmp_path, project_base="local/base:1",
+            project_pull="false" if expected else "true", package_pull=package_pull,
+        )
+    )
+    assert pkg.pull_base_image is expected
+
+
+def test_project_pull_base_image_applies_to_default_image_packages(tmp_path):
+    """No project base_image: the setting still covers packages that fall
+    back to airfield's default image (e.g. an offline site)."""
+    pkg = _load_with_defaults(_make_project_with_package(tmp_path, project_pull="false"))
+    assert pkg.base_image is None
+    assert pkg.pull_base_image is False
+
+
+@pytest.mark.parametrize("written,expected", [("false", False), ("no", False), ('"false"', False), ("true", True)])
+def test_pull_base_image_accepts_yaml_and_quoted_spellings(tmp_path, written, expected):
+    pkg = _load_with_defaults(
+        _make_project_with_package(tmp_path, project_base="local/base:1", project_pull=written)
+    )
+    assert pkg.pull_base_image is expected
+
+
+def test_invalid_project_pull_base_image_is_a_clear_error(tmp_path):
+    import typer
+    pkg_dir = _make_project_with_package(tmp_path, project_base="local/base:1", project_pull="maybe")
+    with pytest.raises(typer.BadParameter, match="pull_base_image .* must be true or false"):
+        _load_with_defaults(pkg_dir)
+
+
+def test_invalid_package_pull_base_image_is_rejected(tmp_path):
+    from pydantic import ValidationError
+    pkg_dir = _make_project_with_package(tmp_path, package_pull="maybe")
+    with pytest.raises(ValidationError):
+        Package.load(pkg_dir / "airfield.yaml")
+
+
+def test_build_package_image_skips_pull_for_project_local_base(tmp_path, mocker, monkeypatch):
+    """End to end through build_package_image: project says pull_base_image:
+    false -> the docker build command has no --pull, with no env var set."""
+    from airfield.cli.package_exec import build_package_image
+    monkeypatch.delenv("AIRFIELD_NO_PULL", raising=False)
+    mocker.patch("airfield.builder.is_arm_mac", return_value=False)
+    mocker.patch("airfield.builder.subprocess.run").return_value.returncode = 0
+    progress = mocker.patch("airfield.builder.run_build_with_progress")
+    progress.return_value = mocker.Mock(returncode=0)
+    mocker.patch("airfield.cli.package_exec._validate_and_configure_host_dependencies")
+
+    pkg_dir = _make_project_with_package(tmp_path, project_base="local/base:1", project_pull="false")
+    build_package_image(pkg_dir, Package.load(pkg_dir / "airfield.yaml"), [], target_device="arm64")
+    cmd = progress.call_args[1]["cmd"]
+    assert "--pull" not in cmd
+
+    other = tmp_path / "other"
+    other.mkdir()
+    pkg_dir = _make_project_with_package(other, project_base="ros:jazzy-ros-base")
+    build_package_image(pkg_dir, Package.load(pkg_dir / "airfield.yaml"), [], target_device="arm64")
+    assert "--pull" in progress.call_args[1]["cmd"]
 
 
 def test_run_container_foreground_stops_container_on_sighup(mocker):

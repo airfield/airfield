@@ -15,6 +15,7 @@ from typing import List, Optional, Tuple
 
 import typer
 import yaml
+from pydantic import TypeAdapter, ValidationError
 
 from airfield.builder import Builder
 from airfield.config import AIRFIELD_CONFIG, AIRFIELD_LOCAL_CONFIG, _load_yaml, dependencies_dir, dependency_search_paths, find_project_root, packages_dir, require_package_root, is_arm_mac
@@ -326,14 +327,20 @@ def resolve_package_context(
     return pkg_dir, pkg, deps, source_root
 
 
-def _apply_project_default_base_image(pkg: Package, pkg_dir: Path) -> None:
-    """Inherit a project-level default ``base_image`` when the package doesn't set one.
+def _apply_project_base_image_defaults(pkg: Package, pkg_dir: Path) -> None:
+    """Inherit the project's ``base_image`` and ``pull_base_image`` defaults.
 
     Lets a whole project pin one base image (e.g. a custom L4T image) in a single
-    place — the project's ``airfield.yaml`` ``base_image:`` field — instead of
-    repeating it in every package's ``airfield.yaml``. An explicit per-package
-    ``base_image`` still wins; a standalone package (no enclosing project) is
-    unaffected and falls back to the ROS/ubuntu default as before.
+    place — the project's ``airfield.yaml`` — instead of repeating it in every
+    package's ``airfield.yaml``. An explicit per-package value still wins; a
+    standalone package (no enclosing project) is unaffected and falls back to
+    the ROS/ubuntu default as before.
+
+    ``pull_base_image`` describes the project's base image, so it is inherited
+    only by packages that don't set their own ``base_image``. A package that
+    names a different image keeps the default (pull) unless it opts out itself;
+    otherwise a project whose own base is local-only would silently stop
+    refreshing that package's registry image.
     """
     if pkg.base_image:
         return
@@ -350,6 +357,14 @@ def _apply_project_default_base_image(pkg: Package, pkg_dir: Path) -> None:
     default_base = data.get("base_image")
     if isinstance(default_base, str) and default_base.strip():
         pkg.base_image = default_base.strip()
+    if pkg.pull_base_image is None and data.get("pull_base_image") is not None:
+        try:
+            pkg.pull_base_image = TypeAdapter(bool).validate_python(data["pull_base_image"])
+        except ValidationError:
+            raise typer.BadParameter(
+                f"pull_base_image in {proj_cfg} must be true or false "
+                f"(got {data['pull_base_image']!r})"
+            )
 
 
 def build_package_image(
@@ -360,7 +375,7 @@ def build_package_image(
     show_all_output: bool = False,
 ) -> str:
     _apply_locked_dependency_versions(pkg)
-    _apply_project_default_base_image(pkg, pkg_dir)
+    _apply_project_base_image_defaults(pkg, pkg_dir)
     _validate_and_configure_host_dependencies(pkg, deps)
 
     builder = Builder(package=pkg, dependencies=deps, target_device=target_device)

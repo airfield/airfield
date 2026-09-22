@@ -46,7 +46,9 @@ stack still comes up from a single plan.
 `airfield.yaml` at the project root is the root marker used for project
 discovery by all runtime commands. Besides `kind`, `name`, `version`, and
 `ros_distro`, it can carry an optional `base_image` (inherited by every
-package that does not set its own) and a `subprojects` map recording the
+package that does not set its own), `pull_base_image: false` for a base image
+that is built locally and exists in no registry (inherited along with the
+project's `base_image`), and a `subprojects` map recording the
 source repositories that make up the project (restored by
 `airfield subpackages checkout`). A package can also live standalone with no
 enclosing project, which is why package commands accept `.`.
@@ -64,6 +66,7 @@ dependencies:
 source_path: src
 ros_distro: jazzy          # optional
 base_image: ...           # optional; overrides the project default
+pull_base_image: false    # optional; default true (docker build --pull)
 colcon_args: ...          # optional; extra args appended to the auto colcon build
 default_workdir: ...      # optional; working dir for run/shell/cmd
 devices: [/dev/ttyACM0]   # optional; host devices passed through

@@ -236,3 +236,73 @@ def test_apt_batch_is_recorded_after_the_pip_baseline(monkeypatch):
     dockerfile = _dockerfile_with(deps, cache_mounts_enabled=False)
 
     assert dockerfile.index("pip-check.sh baseline") < dockerfile.index("python3-scipy")
+
+
+# --- base image pull (pull_base_image / AIRFIELD_NO_PULL) -----------------
+
+def _docker_build(mocker, capsys, package):
+    """Run Builder.build with docker mocked out; return (cmd, printed output)."""
+    mocker.patch("airfield.builder.is_arm_mac", return_value=False)
+    mocker.patch("airfield.builder.subprocess.run").return_value.returncode = 0
+    progress = mocker.patch("airfield.builder.run_build_with_progress")
+    progress.return_value = mocker.Mock(returncode=0)
+    mocker.patch("airfield.builder.shutil.copytree")
+    capsys.readouterr()
+    Builder(package=package, dependencies=[], target_device="arm64").build(context_dir=Path("."))
+    return progress.call_args[1]["cmd"], capsys.readouterr().out
+
+
+def _settings_line(out):
+    return next(line for line in out.splitlines() if line.startswith("[airfield] build settings:"))
+
+
+@pytest.mark.parametrize(
+    "env,pull_base_image,expect_pull,expect_toggle",
+    [
+        # nothing set: default is to refresh the base image
+        (None, None, True, "pull=always"),
+        (None, True, True, "pull=always"),
+        # the airfield.yaml setting alone is enough (the new, per-project way)
+        (None, False, False, "pull=skipped (pull_base_image: false)"),
+        # the env var keeps working exactly as before...
+        ("1", None, False, "pull=skipped (AIRFIELD_NO_PULL=1)"),
+        ("true", None, False, "pull=skipped (AIRFIELD_NO_PULL=true)"),
+        ("yes", None, False, "pull=skipped (AIRFIELD_NO_PULL=yes)"),
+        ("1", True, False, "pull=skipped (AIRFIELD_NO_PULL=1)"),
+        # ...and can now force a pull as a one-off override of the setting
+        ("0", False, True, "pull=always (AIRFIELD_NO_PULL=0)"),
+        ("false", False, True, "pull=always (AIRFIELD_NO_PULL=false)"),
+        # empty counts as unset
+        ("", False, False, "pull=skipped (pull_base_image: false)"),
+        ("  ", None, True, "pull=always"),
+    ],
+)
+def test_base_image_pull_precedence(mocker, capsys, monkeypatch, env, pull_base_image, expect_pull, expect_toggle):
+    if env is None:
+        monkeypatch.delenv("AIRFIELD_NO_PULL", raising=False)
+    else:
+        monkeypatch.setenv("AIRFIELD_NO_PULL", env)
+    cmd, out = _docker_build(mocker, capsys, Package(name="p", pull_base_image=pull_base_image))
+    assert ("--pull" in cmd) is expect_pull
+    assert expect_toggle in _settings_line(out)
+
+
+def test_unrecognized_no_pull_value_warns_and_falls_through(mocker, capsys, monkeypatch):
+    """A typo must not silently flip behavior: warn, then use airfield.yaml."""
+    monkeypatch.setenv("AIRFIELD_NO_PULL", "maybe")
+    cmd, out = _docker_build(mocker, capsys, Package(name="p", pull_base_image=False))
+    assert "--pull" not in cmd
+    assert "[WARN] Ignoring AIRFIELD_NO_PULL='maybe'" in out
+    assert "pull=skipped (pull_base_image: false)" in _settings_line(out)
+
+    monkeypatch.setenv("AIRFIELD_NO_PULL", "maybe")
+    cmd, _ = _docker_build(mocker, capsys, Package(name="p"))
+    assert "--pull" in cmd
+
+
+def test_pull_flag_position_is_unchanged(mocker, capsys, monkeypatch):
+    """--pull still sits between --platform and the build args."""
+    monkeypatch.delenv("AIRFIELD_NO_PULL", raising=False)
+    cmd, _ = _docker_build(mocker, capsys, Package(name="p"))
+    i = cmd.index("--pull")
+    assert cmd[i - 2] == "--platform" and cmd[i + 1] == "--build-arg"

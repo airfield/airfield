@@ -293,7 +293,8 @@ source_path: src
 - If working on a new package, you can have a local `dependencies/<target_device>/` folder in the project or standalone package. Airfield will build from it but prints a warning telling you to upstream the manifests with `airfield package dependencies upstream .`.
 - `source_path` is relative to the package directory
 - `ros_distro` selects the ROS base image and workspace overlay
-- `base_image` optionally overrides the generated image's `FROM` line; when omitted, ROS packages use the selected ROS base image and non-ROS packages use `ubuntu:24.04`
+- `base_image` optionally overrides the generated image's `FROM` line; when omitted, ROS packages use the selected ROS base image and non-ROS packages use `ubuntu:24.04`. The project `airfield.yaml` can also set `base_image`, which every package without its own inherits.
+- `pull_base_image` (default `true`) controls whether each build refreshes the base image from its registry (`docker build --pull`). Set `pull_base_image: false` when the base image is built locally and exists in no registry (a custom board image, for example), where the pull would fail the build. Set it in the project `airfield.yaml` next to `base_image`: packages that inherit the project's base image inherit this too, while a package that names its own `base_image` keeps pulling unless it sets `pull_base_image: false` itself. Because it lives in `airfield.yaml`, every machine that checks out the project gets it with no per-machine setup. Without `--pull`, Docker still downloads a base image that is missing locally; it just never refreshes one it already has.
 - For wrapped ROS packages, `source_path` is usually `.`
 
 Dependency policy:
@@ -385,7 +386,7 @@ only pays for what it uses.
 Environment variables that change build/run behavior (each build prints the
 effective settings in an `[airfield] build settings:` line):
 
-- `AIRFIELD_NO_PULL=1` — don't `--pull` the base image; required when `base_image` is a locally-built image that exists in no registry
+- `AIRFIELD_NO_PULL` — one-off override of `pull_base_image` for the current command: `1`/`true`/`yes` skips the base-image pull, `0`/`false`/`no` forces it. For a project whose base image is local-only, prefer `pull_base_image: false` in its `airfield.yaml`, which needs no per-machine setup
 - `AIRFIELD_PACKAGES_REPO` — git URL of the shared dependency-manifest repository (default `https://github.com/airfield/packages.git`); set for forks, mirrors, or air-gapped sites
 - `AIRFIELD_REPO` — GitHub `owner/name` slug used for update checks (default `airfield/airfield`)
 - `AIRFIELD_FORCE_DOCKER_CACHE_MOUNTS=1` / `AIRFIELD_DISABLE_DOCKER_CACHE_MOUNTS=1` — override BuildKit cache-mount detection

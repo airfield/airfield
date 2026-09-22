@@ -8,6 +8,8 @@ from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from pydantic import TypeAdapter, ValidationError
+
 from airfield.models import Dependency, Package, ROS_DISTROS
 from airfield.build_progress import run_build_with_progress, with_plain_progress
 from airfield.docker_cache import get_cache_optimization_comment
@@ -176,6 +178,27 @@ class Builder:
                 return distro["arm64_base_image"]
             return distro["base_image"]
         return UBUNTU_BASE_IMAGE
+
+    def _resolve_pull(self) -> Tuple[bool, str]:
+        """Whether `docker build` gets `--pull`, plus why, for the settings line.
+
+        Precedence: $AIRFIELD_NO_PULL (a one-off override, either way), then
+        the package's pull_base_image (its own, or the project's inherited by
+        _apply_project_base_image_defaults), then the default: pull. Without
+        `--pull`, Docker still downloads a base image that is missing
+        locally; it just never refreshes one it already has.
+        """
+        raw = os.environ.get("AIRFIELD_NO_PULL", "").strip()
+        if raw:
+            try:
+                no_pull = TypeAdapter(bool).validate_python(raw)
+            except ValidationError:
+                print(f"[WARN] Ignoring AIRFIELD_NO_PULL={raw!r}: expected 1/0, true/false or yes/no.")
+            else:
+                return (not no_pull, f"AIRFIELD_NO_PULL={raw}")
+        if self.package.pull_base_image is False:
+            return (False, "pull_base_image: false")
+        return (True, "")
 
     def _resolve_docker_platform(self) -> Optional[str]:
         return DOCKER_PLATFORMS.get(self.target_device.strip().lower())
@@ -632,15 +655,15 @@ airfield = ["templates/docker/*.j2", "templates/tmux/*.j2"]
                     str(build_root),
                 ]
             else:
-                # `--pull` always refreshes the base image from a registry. Skip it
-                # when AIRFIELD_NO_PULL is set so packages can use a locally-built
-                # base image (e.g. a custom L4T base) that is not in any registry.
-                no_pull = os.environ.get("AIRFIELD_NO_PULL", "").strip().lower() in {"1", "true", "yes"}
+                # `--pull` refreshes the base image from its registry. Skipped for
+                # a locally-built base image (e.g. a custom L4T base) that exists
+                # in no registry, where the pull would fail the build.
+                pull, pull_reason = self._resolve_pull()
                 cmd = [
                     "docker", "build",
                     "--network", "host",
                     "--platform", self._resolve_docker_platform() or self.target_device,
-                    *([] if no_pull else ["--pull"]),
+                    *(["--pull"] if pull else []),
                     "--build-arg", f"UID={uid}",
                     "--build-arg", f"GID={gid}",
                     "--build-arg", f"USERNAME={username}",
@@ -678,7 +701,8 @@ airfield = ["templates/docker/*.j2", "templates/tmux/*.j2"]
                 f"cache_mounts={'on' if cache_mounts_enabled else 'off'}",
             ]
             if not is_arm_mac():
-                toggles.append("pull=skipped (AIRFIELD_NO_PULL set)" if no_pull else "pull=always")
+                pull_toggle = "pull=always" if pull else "pull=skipped"
+                toggles.append(f"{pull_toggle} ({pull_reason})" if pull_reason else pull_toggle)
             for docker_arg, preferred_host_env in torch_build_args:
                 for env_name in (preferred_host_env, docker_arg):
                     if os.environ.get(env_name):

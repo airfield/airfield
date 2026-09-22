@@ -281,9 +281,11 @@ point that every pane sources. A small inset shows the plan-yaml
   project `airfield.yaml` pins the base for every package unless a package
   overrides it. This is how a whole project targets a specific board/ROS image
   from a single source of truth.
-- **`AIRFIELD_NO_PULL=1`** makes `docker build` use a local-only base image
+- **`pull_base_image: false`** makes `docker build` use a local-only base image
   (e.g. a custom board image not in any registry) instead of trying to pull it.
-  It can be exported in a plan's `pre_window` or a wrapper script.
+  Set next to `base_image:` in the project `airfield.yaml`, it travels with the
+  project to every machine. `AIRFIELD_NO_PULL` overrides it for one command
+  (`1` skips the pull, `0` forces it).
 - **Why the shared workspace + serialized build exist:** launching a plan spins
   up one container per pane, and if each pane built its own `colcon` package
   concurrently the host can run out of memory. The entry wrapper's
