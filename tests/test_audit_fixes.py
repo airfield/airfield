@@ -10,8 +10,8 @@ def test_dockerfile_never_installs_airfield_from_pypi():
     builder = Builder(package=Package(name="p", ros_distro="jazzy"), dependencies=[], target_device="arm64")
     for cache_mounts in (True, False):
         df = builder.generate_dockerfile(cache_mounts_enabled=cache_mounts)
-        assert "COPY airfield /opt/airfield" in df
-        assert "/opt/airfield" in df
+        assert "COPY airfield/project /opt/airfield/project" in df
+        assert "COPY airfield/src /opt/airfield/src" in df
         # A bare "pip install ... airfield" would fetch the squatted PyPI name.
         for line in df.splitlines():
             if "pip install" in line:
@@ -29,16 +29,19 @@ def test_dockerfile_is_slim():
 def test_stage_airfield_source_stages_only_the_package(tmp_path):
     """The image gets the running CLI's own package and a generated project
     file, from a checkout and from an installed copy alike. A checkout's
-    README, docs and tests are not staged, so editing them changes no image."""
+    README, docs and tests are not staged, so editing them changes no image.
+    The two are staged apart, because they go into the image at different
+    points (see test_airfields_own_code_is_the_last_thing_in_the_recipe)."""
     builder = Builder(package=Package(name="p"), dependencies=[], target_device="x86_64")
     builder._stage_airfield_source(tmp_path / "ctx")
 
     staged = tmp_path / "ctx" / "airfield"
-    assert sorted(path.name for path in staged.iterdir()) == ["pyproject.toml", "src"]
+    assert sorted(path.name for path in staged.iterdir()) == ["project", "src"]
     assert (staged / "src" / "airfield" / "main.py").exists()
     assert (staged / "src" / "airfield" / "templates" / "tmux" / "tmuxinator.yml.j2").exists()
     assert not list(staged.rglob("__pycache__"))
-    pyproject = (staged / "pyproject.toml").read_text(encoding="utf-8")
+    assert [path.name for path in (staged / "project").iterdir()] == ["pyproject.toml"]
+    pyproject = (staged / "project" / "pyproject.toml").read_text(encoding="utf-8")
     assert 'name = "airfield"' in pyproject
     assert "typer" in pyproject
 

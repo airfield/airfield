@@ -1,4 +1,5 @@
 import hashlib
+import json
 import os
 import re
 import shlex
@@ -31,6 +32,10 @@ UBUNTU_BASE_IMAGE = "ubuntu:24.04"
 # real command runs, then hands off to a login shell (whose profile sources ROS
 # + the workspace overlay). Skips the build when the package has no colcon
 # source in ~/workspace/src (apt-only/tool packages), or is already built.
+# "Built" is install/<pkg> plus no marker of an unfinished build: colcon makes
+# that folder when it starts on a package, so the folder alone is also there
+# after a build that failed or was cut short, and while another container is
+# still compiling.
 # Concurrent containers serialize on a flock in the shared log/ dir so only one
 # colcon build runs at a time (a Jetson-class host OOMs on parallel builds);
 # make/cmake parallelism defaults are derived from the host (cores, capped by
@@ -51,23 +56,48 @@ if [ -n "$pkg" ] && [ -n "${ROS_DISTRO:-}" ] \\
         source "/opt/ros/$ROS_DISTRO/setup.bash"
         cd "$ws" || exit 1
         mkdir -p build install log
-        if command -v colcon >/dev/null 2>&1 \\
-            && colcon list -n 2>/dev/null | grep -qx "$pkg" \\
-            && [ ! -e "install/$pkg" ]; then
-            echo "[airfield-entry] building '$pkg' into $ws/install (first run)..."
-            # Default build parallelism: one job per core, capped by ~4GB RAM
-            # per job (protects memory-lean boards; big hosts get full cores).
-            cores=$(nproc 2>/dev/null || echo 2)
-            mem_kb=$(awk '/MemTotal/ {print $2}' /proc/meminfo 2>/dev/null || echo 8388608)
-            mem_jobs=$(( mem_kb / 4194304 ))
-            [ "$mem_jobs" -lt 1 ] && mem_jobs=1
-            jobs=$(( cores < mem_jobs ? cores : mem_jobs ))
-            export MAKEFLAGS="${MAKEFLAGS:--j$jobs}"
-            export CMAKE_BUILD_PARALLEL_LEVEL="${CMAKE_BUILD_PARALLEL_LEVEL:-$jobs}"
-            # shellcheck disable=SC2086
-            flock log/.airfield_build.lock \\
+        # A marker per package whose build was started and has not finished.
+        # Inside install/, so that it lives and dies with what it describes
+        # (colcon's own setup scripts skip dot-names there).
+        unfinished="install/.airfield-unfinished"
+        needs_build() { [ ! -e "install/$pkg" ] || [ -e "$unfinished/$pkg" ]; }
+        # needs_build comes first: it is two file tests, where `colcon list`
+        # costs most of a second on every container start.
+        if needs_build && command -v colcon >/dev/null 2>&1 \\
+            && colcon list -n 2>/dev/null | grep -qx "$pkg"; then
+            # One build at a time across containers. The lock is held until
+            # this subshell ends.
+            exec 9>log/.airfield_build.lock
+            flock 9
+            # Another container may have built it while this one waited.
+            if needs_build; then
+                why="first run"
+                [ -e "$unfinished/$pkg" ] && why="its last build did not finish"
+                echo "[airfield-entry] building '$pkg' into $ws/install ($why)..."
+                # Default build parallelism: one job per core, capped by ~4GB RAM
+                # per job (protects memory-lean boards; big hosts get full cores).
+                cores=$(nproc 2>/dev/null || echo 2)
+                mem_kb=$(awk '/MemTotal/ {print $2}' /proc/meminfo 2>/dev/null || echo 8388608)
+                mem_jobs=$(( mem_kb / 4194304 ))
+                [ "$mem_jobs" -lt 1 ] && mem_jobs=1
+                jobs=$(( cores < mem_jobs ? cores : mem_jobs ))
+                export MAKEFLAGS="${MAKEFLAGS:--j$jobs}"
+                export CMAKE_BUILD_PARALLEL_LEVEL="${CMAKE_BUILD_PARALLEL_LEVEL:-$jobs}"
+                # Mark what this build is about to create: the package, and
+                # the workspace packages it needs that are not built yet. One
+                # that is already built keeps running for everyone meanwhile.
+                mkdir -p "$unfinished"
+                targets="$pkg $(colcon list -n --packages-up-to "$pkg" 2>/dev/null)"
+                for name in $targets; do
+                    if [ ! -e "install/$name" ] || [ -e "$unfinished/$name" ]; then
+                        : > "$unfinished/$name"
+                    fi
+                done
+                # shellcheck disable=SC2086
                 colcon build --packages-up-to "$pkg" --parallel-workers 1 \\
-                ${AIRFIELD_COLCON_ARGS:-}
+                    ${AIRFIELD_COLCON_ARGS:-} || exit 1
+                for name in $targets; do rm -f "$unfinished/$name"; done
+            fi
         fi
     ) || { echo "[airfield-entry] build of '$pkg' failed; not running command" >&2; exit 1; }
 fi
@@ -193,6 +223,30 @@ SKEL_DIR = "/opt/airfield-skel"
 # Part of every image tag. Bump it when what an image means changes without
 # its recipe changing, so images built the old way are not mistaken for new.
 IMAGE_SCHEME = "2"
+
+# Airfield's own code is the last thing put into an image, so that a new
+# version of Airfield redoes that one step and leaves every dependency layer
+# as it was. Two pieces make that possible:
+#
+# - AIRFIELD_PROJECT_DIR holds a project with metadata only: the CLI's
+#   requirement list and the `airfield` command, no code. pip installs it
+#   early, where the CLI itself used to be installed, so the package's Python
+#   environment is put together exactly as before. It changes only when the
+#   requirement list does. Its version is fixed for the same reason; the real
+#   one is `airfield.__version__`, in the code.
+# - AIRFIELD_SRC_DIR receives the code at the very end. A .pth file written
+#   by the early step is what makes it importable from there.
+AIRFIELD_PROJECT_DIR = "/opt/airfield/project"
+AIRFIELD_SRC_DIR = "/opt/airfield/src"
+IMAGE_DIST_VERSION = "0+image"
+
+# The oldest Python the CLI runs on. A base image may well ship an older one
+# (ROS Noetic and many vendor board images are Ubuntu 20.04, Python 3.8). The
+# image is no less useful for it: nothing Airfield does to a container needs
+# the CLI inside it. So on such a base the `airfield` command is left out and
+# the build goes on, where it used to stop at pip's "requires a different
+# Python" and leave that base without any image at all.
+AIRFIELD_MIN_PYTHON = (3, 10)
 
 # Baked into every image at /opt/airfield-pip-check.sh and run twice during the
 # build: once to record which distributions the base image already ships broken,
@@ -345,20 +399,23 @@ class Builder:
         return runtime or fallback
 
     def _airfield_pyproject(self) -> str:
-        """An installable project description for the running CLI."""
-        import airfield as airfield_pkg
+        """The project pip installs for the running CLI: what it requires and
+        the `airfield` command, and none of its code (see AIRFIELD_SRC_DIR).
 
-        version = getattr(airfield_pkg, "__version__", "0.0.0")
-        requirements = ",\n    ".join(f'"{req}"' for req in self._airfield_runtime_requirements())
+        Nothing here may follow the code, or every edit to Airfield would
+        again reinstall each package's dependencies."""
+        # json.dumps gives a valid TOML string whatever a requirement holds
+        # (an environment marker carries double quotes).
+        requirements = ",\n    ".join(json.dumps(req) for req in self._airfield_runtime_requirements())
         return f"""[build-system]
 requires = ["setuptools>=64.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "airfield"
-version = "{version}"
+version = "{IMAGE_DIST_VERSION}"
 description = "The framework for reproducible robots."
-requires-python = ">=3.10"
+requires-python = ">={AIRFIELD_MIN_PYTHON[0]}.{AIRFIELD_MIN_PYTHON[1]}"
 dependencies = [
     {requirements}
 ]
@@ -367,13 +424,7 @@ dependencies = [
 airfield = "airfield.main:app"
 
 [tool.setuptools]
-package-dir = {{"" = "src"}}
-
-[tool.setuptools.packages.find]
-where = ["src"]
-
-[tool.setuptools.package-data]
-airfield = ["templates/docker/*.j2", "templates/tmux/*.j2"]
+packages = []
 """
 
     def _airfield_source_files(self) -> List[Tuple[str, bytes]]:
@@ -384,11 +435,12 @@ airfield = ["templates/docker/*.j2", "templates/tmux/*.j2"]
         pydantic forms library), so a registry install puts wrong third-party
         code in every image.
 
-        Only the imported package itself is staged, with a generated project
-        file around it, whether the CLI runs from a checkout or from an
-        installed copy. A checkout's README, docs, tests and stray files stay
-        out, so they change neither the image nor its tag: two machines on the
-        same Airfield code stage the same bytes.
+        Only the imported package itself is staged (under src/), next to a
+        generated project file (under project/, see _airfield_pyproject),
+        whether the CLI runs from a checkout or from an installed copy. A
+        checkout's README, docs, tests and stray files stay out, so they
+        change neither the image nor its tag: two machines on the same
+        Airfield code stage the same bytes.
         """
         import airfield as airfield_pkg
 
@@ -401,7 +453,7 @@ airfield = ["templates/docker/*.j2", "templates/tmux/*.j2"]
             if path.suffix in {".pyc", ".pyo"} or path.name.startswith(".") or path.name.endswith("~"):
                 continue
             files.append((f"src/airfield/{relative.as_posix()}", path.read_bytes()))
-        files.append(("pyproject.toml", self._airfield_pyproject().encode("utf-8")))
+        files.append(("project/pyproject.toml", self._airfield_pyproject().encode("utf-8")))
         return files
 
     def _stage_airfield_source(self, build_root: Path) -> None:
@@ -723,29 +775,38 @@ airfield = ["templates/docker/*.j2", "templates/tmux/*.j2"]
                 "python3 -m pip install --upgrade pip || true"
             )
 
-        # Install the airfield CLI staged into the build context by
-        # _stage_airfield_source. Never install "airfield" from PyPI: that name
-        # belongs to an unrelated third-party project.
-        lines.append("COPY airfield /opt/airfield")
-        if cache_mounts_enabled:
-            lines.append(
-                "RUN --mount=type=cache,target=/root/.cache/pip \\\n"
-                "    python3 -m pip install /opt/airfield || \\\n"
-                "    python3 -m pip install --break-system-packages /opt/airfield"
-            )
-        else:
-            lines.append(
-                "RUN python3 -m pip install --no-cache-dir /opt/airfield || "
-                "python3 -m pip install --no-cache-dir --break-system-packages /opt/airfield"
-            )
+        # What the airfield CLI needs, staged into the build context by
+        # _stage_airfield_source: a project holding its requirement list and
+        # the `airfield` command, no code. Installed here, ahead of the
+        # package's own dependencies as the CLI always was, it changes only
+        # when that list does. The code is copied in at the very end; the
+        # .pth file written here is what makes it importable from there.
+        # Never install "airfield" from PyPI: that name belongs to an
+        # unrelated third-party project.
+        lines.append(f"COPY airfield/project {AIRFIELD_PROJECT_DIR}")
+        pip_install = "python3 -m pip install" if cache_mounts_enabled else "python3 -m pip install --no-cache-dir"
+        oldest = f"{AIRFIELD_MIN_PYTHON[0]}.{AIRFIELD_MIN_PYTHON[1]}"
+        lines.append(
+            ("RUN --mount=type=cache,target=/root/.cache/pip \\\n    " if cache_mounts_enabled else "RUN ")
+            # A base image with an older Python still gets its image, without
+            # the `airfield` command in it (see AIRFIELD_MIN_PYTHON).
+            + f"if python3 -c 'import sys; sys.exit(sys.version_info < {AIRFIELD_MIN_PYTHON})'; then \\\n"
+            f"    ({pip_install} {AIRFIELD_PROJECT_DIR} || \\\n"
+            f"    {pip_install} --break-system-packages {AIRFIELD_PROJECT_DIR}) && \\\n"
+            "    site_dir=\"$(python3 -c 'import site; print(site.getsitepackages()[0])')\" && \\\n"
+            f"    mkdir -p \"$site_dir\" && echo {AIRFIELD_SRC_DIR} > \"$site_dir/airfield-src.pth\"; \\\n"
+            "    else \\\n"
+            f"    echo \"[airfield] This base image has $(python3 -V 2>&1), older than the {oldest} the airfield command needs.\" && \\\n"
+            "    echo \"[airfield] The command is left out of the image. Everything else is built as usual.\"; \\\n"
+            "    fi"
+        )
 
         pip_check_mode = self._pip_check_mode()
         if pip_check_mode != "off":
-            # Placed directly after the airfield CLI install, which already busts
-            # the cache below it whenever airfield's source changes, so this COPY
-            # costs no extra layer invalidation. The baseline must be recorded
-            # before any dependency install runs: everything broken from here on
-            # is attributable to this package.
+            # The baseline must be recorded before any dependency install
+            # runs: everything broken from here on is attributable to this
+            # package. This script is copied here, and not with Airfield's
+            # other files at the end, because the build itself runs it.
             lines.append("COPY airfield-pip-check.sh /opt/airfield-pip-check.sh")
             lines.append("RUN chmod 755 /opt/airfield-pip-check.sh")
             lines.append(f"RUN /opt/airfield-pip-check.sh baseline {PIP_BASELINE_PATH}")
@@ -802,12 +863,6 @@ airfield = ["templates/docker/*.j2", "templates/tmux/*.j2"]
                 f"printf '%s\\n' 'if [ -f $HOME/workspace/install/setup.bash ]; then source $HOME/workspace/install/setup.bash; fi' >> {SKEL_DIR}/.profile"
             )
         lines.append(f"RUN {skel}")
-        lines.append("COPY airfield-init.sh /opt/airfield-init.sh")
-        lines.append("RUN chmod 755 /opt/airfield-init.sh")
-        if self.ros_distro:
-            # Build-if-needed command wrapper used by `package cmd`/`package run`.
-            lines.append("COPY airfield-entry.sh /opt/airfield-entry.sh")
-            lines.append("RUN chmod 755 /opt/airfield-entry.sh")
 
         # The unprivileged part of the build runs as a fixed account, with a
         # fixed home. Idempotent, so an Airfield image can serve as a base.
@@ -866,6 +921,18 @@ airfield = ["templates/docker/*.j2", "templates/tmux/*.j2"]
         lines.append("ENV HOME=/root")
         lines.append("WORKDIR /")
         lines.append("ENV IN_AIRFIELD_CONTAINER=1")
+
+        # Airfield's own files come last. Everything above is the package's
+        # environment and none of it reads them, so a new version of Airfield
+        # redoes only these steps: seconds, where reinstalling every
+        # dependency took minutes. Nothing may follow that a package pays for.
+        lines.append("COPY airfield-init.sh /opt/airfield-init.sh")
+        lines.append("RUN chmod 755 /opt/airfield-init.sh")
+        if self.ros_distro:
+            # Build-if-needed command wrapper used by `package cmd`/`package run`.
+            lines.append("COPY airfield-entry.sh /opt/airfield-entry.sh")
+            lines.append("RUN chmod 755 /opt/airfield-entry.sh")
+        lines.append(f"COPY airfield/src {AIRFIELD_SRC_DIR}")
 
         return "\n".join(lines)
 

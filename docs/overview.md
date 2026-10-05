@@ -365,6 +365,16 @@ up = the whole stack, laid out as a tmux session.**
 - Names with no manifest are translated with rosdep's data, read on the host.
   rosdep's installers other than apt and pip (source, snap, gem) are not
   supported; a name that needs one needs a manifest.
+- Base images must be Debian or Ubuntu based: the generated build installs
+  with apt. Any ROS distribution's image works as a base, and so does a
+  vendor board image built on Ubuntu.
+- The `airfield` command inside an image needs Python 3.10 or newer. On a base
+  image with an older Python (ROS Noetic and many vendor board images are
+  Ubuntu 20.04, Python 3.8) the image is built without that command and the
+  build says so. Nothing Airfield does to a container needs it there.
+- The automatic first-run build uses colcon. A ROS 1 package gets its image
+  and its containers like any other, but its catkin workspace is built by
+  hand (`airfield package shell`).
 - `airfield project run` runs a package's `default` command when present,
   otherwise it opens an interactive shell.
 - `airfield package deinit` and `airfield project deinit` remove the affected

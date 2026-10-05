@@ -214,7 +214,7 @@ def _wrap_existing_ros_package(path: Path, force: bool, ros_distro: str) -> None
 def run(
     name: Optional[str] = typer.Argument(None, help="New package name (omit when using --path for existing ROS package)"),
     path: Optional[Path] = typer.Option(None, "--path", help="Path to existing ROS package to wrap in place"),
-    ros_distro: Optional[str] = typer.Option(None, "--ros-distro", help="ROS distribution for the package workspace (noetic, humble, or jazzy)"),
+    ros_distro: Optional[str] = typer.Option(None, "--ros-distro", help=f"ROS distribution for the package workspace ({', '.join(sorted(SUPPORTED_ROS_DISTROS))})"),
     force: bool = typer.Option(False, "--force", help="Overwrite existing airfield.yaml if present"),
 ):
     """Initialize a new Airfield package or wrap an existing ROS package."""

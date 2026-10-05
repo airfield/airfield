@@ -136,7 +136,7 @@ airfield package init --path /path/to/existing_ros_package --ros-distro jazzy
 If `package.xml` exists in that path, Airfield adds:
 
 - `airfield.yaml` with the inferred `name` and an empty `dependencies:` list
-- `ros_distro` to select the ROS workspace base image (`noetic`, `humble`, or `jazzy`)
+- `ros_distro` to select the ROS workspace base image (`noetic`, `humble`, `jazzy`, `kilted`, or `rolling`)
 - `AIRFIELD.md` with migration notes
 
 The dependency list is left empty on purpose: the package's dependencies stay
@@ -221,6 +221,12 @@ airfield package build nav_stack --rebuild   # build from scratch, whatever exis
   refresh its base image (`pull_base_image: false`): the image is rebuilt only
   when its recipe or the local base image changes. A package that does
   refresh its base image builds every time, as before.
+- An update to Airfield gives every image a new tag, because Airfield's own
+  code is part of the image. That code is the last thing put into an image,
+  so the rebuild redoes that one step and keeps every dependency install: it
+  takes seconds. This relies on the earlier build's layers being on the
+  machine. A machine that pulled its image and never built it has none, so
+  let a machine that did build `--push` the new image first.
 - Image reuse and sharing are implemented for Docker. With Apple's
   `container` engine every command builds, as before.
 
@@ -524,6 +530,12 @@ Generated images are intentionally minimal: the base image plus `python3-pip`,
 (installed from your running copy, never from PyPI). Everything else — OpenCV,
 GUI libraries, extra shells — must be declared as dependencies so each package
 only pays for what it uses.
+
+The base image has to be Debian or Ubuntu based, because the build installs
+with apt. The airfield CLI needs Python 3.10 or newer; on a base image with an
+older Python (ROS Noetic and many vendor board images are Ubuntu 20.04) the
+image is built without the `airfield` command inside it, and the build says
+so. Nothing else about the image, or about how Airfield runs it, changes.
 
 A container starts as root in `/opt/airfield-init.sh`, which creates the
 caller's account and runs the command as that user. Two consequences:

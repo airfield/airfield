@@ -269,10 +269,120 @@ def test_only_airfields_own_package_goes_into_the_image():
     leaving an editor's swap file behind, must not give every image a new tag."""
     names = [name for name, _ in _ros_builder()._airfield_source_files()]
 
-    assert "pyproject.toml" in names and "src/airfield/main.py" in names
-    assert all(name == "pyproject.toml" or name.startswith("src/airfield/") for name in names)
+    assert "project/pyproject.toml" in names and "src/airfield/main.py" in names
+    assert all(name == "project/pyproject.toml" or name.startswith("src/airfield/") for name in names)
     assert not any("__pycache__" in name or name.endswith(".pyc") for name in names)
-    assert names == sorted(names[:-1]) + ["pyproject.toml"], "a fixed order, so the fingerprint is stable"
+    assert names == sorted(names[:-1]) + ["project/pyproject.toml"], "a fixed order, so the fingerprint is stable"
+
+
+# --- a new Airfield must not cost every package its dependency installs ------------
+
+def _recipe_steps(dockerfile):
+    """The Dockerfile's instructions, continuation lines joined."""
+    steps = []
+    for line in dockerfile.splitlines():
+        if not line.strip() or line.startswith("#"):
+            continue
+        if steps and steps[-1].endswith("\\"):
+            steps[-1] = steps[-1][:-1] + line
+        else:
+            steps.append(line)
+    return steps
+
+
+@pytest.mark.parametrize("cache_mounts", [True, False])
+def test_airfields_own_code_is_the_last_thing_in_the_recipe(monkeypatch, cache_mounts):
+    """Docker redoes every step after the first one that changed. Airfield's
+    code changes with every release, a package's dependencies rarely, so the
+    code goes in after them: an update to Airfield then redoes one copy, not
+    each package's apt and pip installs and source builds."""
+    monkeypatch.delenv("AIRFIELD_PIP_CHECK", raising=False)
+    deps = [
+        Dependency(name="a", apt=["liba"], pip=["tqdm"]),
+        Dependency(name="b", system=["make -C /opt/b install"], user=["python3 -m pip install b"]),
+    ]
+    builder = Builder(Package(name="p", ros_distro="jazzy"), deps, "arm64")
+    steps = _recipe_steps(builder.generate_dockerfile(cache_mounts_enabled=cache_mounts))
+
+    assert steps[-1] == "COPY airfield/src /opt/airfield/src"
+
+    def at(fragment):
+        (index,) = [i for i, step in enumerate(steps) if fragment in step]
+        return index
+
+    costly = [at("install -y liba"), at("make -C /opt/b install"), at("--break-system-packages tqdm"),
+              at("pip install b"), at("airfield-pip-check.sh verify")]
+    own_files = [at("COPY airfield-init.sh"), at("COPY airfield-entry.sh"), at("COPY airfield/src")]
+    assert max(costly) < min(own_files), "nothing a package pays for may come after Airfield's own files"
+
+    # What the CLI requires still goes in first, where the CLI used to be
+    # installed, so the package's Python environment is assembled as before.
+    requirements = at("/opt/airfield/project ||")
+    assert at("COPY airfield/project") < requirements < at("airfield-pip-check.sh baseline") < min(costly)
+    assert "/opt/airfield/src > " in steps[requirements], "and it leaves the pointer to where the code will be"
+
+
+def test_a_new_airfield_changes_the_tag_but_no_early_step(monkeypatch):
+    """The image is another image, so it gets another tag. But neither the
+    recipe's text nor the project pip installs early may follow Airfield's
+    code or its version number, or the dependency layers are lost again."""
+    import airfield
+
+    builder = _ros_builder()
+    recipe, project, tag = builder.generate_dockerfile(), builder._airfield_pyproject(), builder.fingerprint()
+
+    monkeypatch.setattr(airfield, "__version__", "99.0.0")
+    files = builder._airfield_source_files()
+    monkeypatch.setattr(
+        Builder, "_airfield_source_files",
+        lambda self: [(name, content + b"\n# edited\n" if name == "src/airfield/main.py" else content) for name, content in files],
+    )
+
+    assert builder.generate_dockerfile() == recipe
+    assert builder._airfield_pyproject() == project
+    assert dict(builder._airfield_source_files())["project/pyproject.toml"] == project.encode("utf-8")
+    assert builder.fingerprint() != tag
+
+
+def test_the_project_installed_early_carries_no_code():
+    """Only the requirement list and the `airfield` command: pip must have
+    nothing to package that an edit to Airfield could change."""
+    project = _ros_builder()._airfield_pyproject()
+
+    assert "packages = []" in project
+    assert 'airfield = "airfield.main:app"' in project
+    assert "src" not in project and "package-data" not in project
+    assert '"typer' in project and '"pydantic' in project
+
+
+@pytest.mark.parametrize("cache_mounts", [True, False])
+def test_a_base_image_with_an_older_python_still_gets_its_image(cache_mounts):
+    """The CLI needs Python 3.10. ROS Noetic and many board images are Ubuntu
+    20.04 with 3.8, and pip refuses to install the CLI there. That used to
+    fail the whole build, leaving such a base with no image at all, over a
+    command nothing in a container depends on. Now it is left out, with a
+    line in the build output, and only on such a base."""
+    steps = _recipe_steps(_ros_builder().generate_dockerfile(cache_mounts_enabled=cache_mounts))
+    (step,) = [step for step in steps if "/opt/airfield/project ||" in step]
+
+    assert "sys.exit(sys.version_info < (3, 10))" in step
+    assert step.index("if python3 -c") < step.index("pip install") < step.index("else") < step.index("left out of the image")
+    assert step.rstrip().endswith("fi")
+    assert 'requires-python = ">=3.10"' in _ros_builder()._airfield_pyproject(), "the same bound pip enforces"
+
+
+def test_a_requirement_with_a_marker_stays_valid_toml(monkeypatch):
+    monkeypatch.setattr(
+        Builder, "_airfield_runtime_requirements",
+        lambda self: ["typer>=0.9.0", 'tomli>=2; python_version < "3.11"'],
+    )
+    try:
+        import tomllib
+    except ModuleNotFoundError:  # Python 3.10
+        import tomli as tomllib
+    parsed = tomllib.loads(_ros_builder()._airfield_pyproject())
+
+    assert parsed["project"]["dependencies"] == ["typer>=0.9.0", 'tomli>=2; python_version < "3.11"']
 
 
 # --- reuse, fetch or build ---------------------------------------------------------

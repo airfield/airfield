@@ -210,17 +210,23 @@ my_robot/                             ◄── PROJECT  (airfield.yaml, kind: p
                          project base_image →        ├─ already on this machine?  use it
                          else ROS default)           ├─ in the project's image_registry?  pull it
                                                      └─ else  docker build  (--push uploads it)
-                        + apt + colcon, install the airfield CLI,
+                        + apt + colcon, install what the airfield CLI requires,
                           record the pip conflict baseline (base image state),
                           ONE batched `apt-get install` of every dep's `apt:`,
                           then dep `system:` commands (as root),
                           shell rc skeleton (source ROS + workspace install),
-                          COPY /opt/airfield-init.sh and /opt/airfield-entry.sh,
                           then, as a fixed build account (never the builder's own):
                           ONE batched `pip install` of every dep's `pip:` specs,
                           dep `user:` commands (custom index, GPU branch),
-                          `pip check` vs the baseline → fail on NEW conflicts
+                          `pip check` vs the baseline → fail on NEW conflicts,
+                          and LAST airfield's own files: /opt/airfield-init.sh,
+                          /opt/airfield-entry.sh and the CLI's code
 ```
+
+Airfield's own files go in last on purpose. Docker redoes every step after the
+first one that changed, and Airfield changes more often than a package's
+dependencies do. With its code at the end, a new Airfield redoes that one copy
+and every dependency install above it is kept.
 
 The image holds no account for whoever builds or runs it. Each container
 starts in `/opt/airfield-init.sh`, which makes the caller's account (same
@@ -253,7 +259,8 @@ the build.
                        make the caller's account (same name, ids and home
                        path as on the host), then continue as that user
                 └─► /opt/airfield-entry.sh:
-                       if <pkg> not yet in ~/workspace/install:
+                       if <pkg> not built yet in ~/workspace/install
+                       (a build that failed or was cut short does not count):
                            flock-serialized  colcon build --packages-up-to <pkg>
                            (one build at a time, capped parallelism → OOM-safe)
                        exec bash -lc "<cmd>"   (profile auto-sources ROS + install)

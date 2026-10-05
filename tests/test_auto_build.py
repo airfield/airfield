@@ -1,5 +1,9 @@
 """Auto-build feature: in-container entry wrapper + colcon_args + project down."""
+import os
+import shutil
+import signal
 import subprocess
+import time
 
 import pytest
 
@@ -151,3 +155,212 @@ def test_project_down_survives_missing_binaries(cli_runner, project_with_plans, 
     assert result.exit_code == 0
     assert not isinstance(result.exception, FileNotFoundError)
     assert "not found" in result.output
+
+
+# --- the entry script's "is it built?" decision, run for real ---------------------
+#
+# install/<pkg> alone does not mean built: colcon creates the folder when it
+# starts on a package. These run the script itself against a stand-in colcon
+# that behaves that way. Only the fixed /opt/ros prefix is swapped for a
+# temporary folder, so no ROS install and no container is needed.
+
+FAKE_COLCON = r"""#!/bin/bash
+# Stand-in for colcon: just enough for airfield-entry.sh.
+echo "$*" >> "$FAKE/calls"
+case "$1" in
+list)
+    if [[ " $* " == *" --packages-up-to "* ]]; then
+        cat "$FAKE/up_to_${*: -1}" 2>/dev/null
+    else
+        cat "$FAKE/all"
+    fi
+    ;;
+build)
+    target="$3"
+    for name in $(cat "$FAKE/up_to_$target"); do
+        [ -e "install/$name/built" ] && continue
+        mkdir -p "install/$name"    # as colcon does: before the work, not after
+        [ -e "$FAKE/slow" ] && sleep "$(cat "$FAKE/slow")"
+        [ -e "$FAKE/fail_$name" ] && exit 2
+        : > "install/$name/built"
+    done
+    ;;
+esac
+"""
+
+needs_flock = pytest.mark.skipif(
+    shutil.which("flock") is None or shutil.which("bash") is None,
+    reason="the entry script needs bash and flock (util-linux)",
+)
+
+
+class EntryWorkspace:
+    """A home with ~/workspace/src, a fake ROS install and a fake colcon."""
+
+    def __init__(self, root):
+        self.home = root / "home"
+        self.fake = root / "fake"
+        self.workspace = self.home / "workspace"
+        (self.workspace / "src").mkdir(parents=True)
+        self.fake.mkdir()
+        (root / "ros" / "fake").mkdir(parents=True)
+        (root / "ros" / "fake" / "setup.bash").write_text("", encoding="utf-8")
+        (root / "bin").mkdir()
+        colcon = root / "bin" / "colcon"
+        colcon.write_text(FAKE_COLCON, encoding="utf-8")
+        colcon.chmod(0o755)
+        self.script = root / "airfield-entry.sh"
+        self.script.write_text(ENTRY_SCRIPT.replace("/opt/ros/", f"{root}/ros/"), encoding="utf-8")
+        self.env = {
+            "HOME": str(self.home), "ROS_DISTRO": "fake", "FAKE": str(self.fake),
+            "PATH": f"{root / 'bin'}:/usr/bin:/bin",
+        }
+        self.packages({"pkg": ["pkg"]})
+
+    def packages(self, up_to):
+        """up_to: package -> what `colcon build --packages-up-to` it builds, in order."""
+        (self.fake / "all").write_text("".join(f"{name}\n" for name in up_to), encoding="utf-8")
+        for name, order in up_to.items():
+            (self.fake / f"up_to_{name}").write_text("".join(f"{dep}\n" for dep in order), encoding="utf-8")
+
+    def start(self, package="pkg", command="echo ran"):
+        return subprocess.Popen(
+            ["bash", str(self.script), command],
+            env={**self.env, "AIRFIELD_BUILD_PKG": package},
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True,
+        )
+
+    def run(self, package="pkg", command="echo ran"):
+        process = self.start(package, command)
+        out, err = process.communicate(timeout=60)
+        return process.returncode, out, err
+
+    def calls(self):
+        path = self.fake / "calls"
+        lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+        path.write_text("", encoding="utf-8")
+        return lines
+
+    def builds(self):
+        return [line for line in self.calls() if line.startswith("build ")]
+
+    def fail(self, name, failing=True):
+        path = self.fake / f"fail_{name}"
+        path.write_text("", encoding="utf-8") if failing else path.unlink()
+
+    def unfinished(self):
+        folder = self.workspace / "install" / ".airfield-unfinished"
+        return sorted(path.name for path in folder.iterdir()) if folder.exists() else []
+
+
+@needs_flock
+def test_entry_builds_once_and_then_does_not_even_ask_colcon(tmp_path):
+    ws = EntryWorkspace(tmp_path)
+
+    code, out, _ = ws.run()
+    assert (code, out.splitlines()[-1]) == (0, "ran")
+    assert "(first run)" in out and len(ws.builds()) == 1
+    assert ws.unfinished() == []
+
+    code, out, _ = ws.run()
+    assert (code, out) == (0, "ran\n")
+    assert ws.calls() == [], "`colcon list` costs most of a second per container start"
+
+
+@needs_flock
+def test_entry_tries_again_after_a_build_that_failed(tmp_path):
+    """The failed build leaves install/<pkg> behind. Taking that folder for a
+    finished build would run the command against a package that was never
+    built, on every later run, until someone deleted the folder by hand."""
+    ws = EntryWorkspace(tmp_path)
+    ws.fail("pkg")
+
+    code, out, err = ws.run()
+    assert code == 1 and "ran" not in out and "build of 'pkg' failed" in err
+    assert (ws.workspace / "install" / "pkg").is_dir(), "what colcon leaves behind"
+    assert ws.unfinished() == ["pkg"]
+    ws.calls()
+
+    code, out, err = ws.run()
+    assert code == 1 and "ran" not in out, "still broken: build again, do not run"
+    assert "its last build did not finish" in out and len(ws.builds()) == 1
+
+    ws.fail("pkg", False)
+    code, out, _ = ws.run()
+    assert (code, out.splitlines()[-1]) == (0, "ran")
+    assert ws.unfinished() == [] and len(ws.builds()) == 1
+
+    assert ws.run()[:2] == (0, "ran\n") and ws.calls() == []
+
+
+@needs_flock
+def test_entry_marks_the_packages_a_failed_build_was_about_to_create(tmp_path):
+    """Another pane may run one of them. It has to see that its package is
+    not built either, and not find the folder the failed build left."""
+    ws = EntryWorkspace(tmp_path)
+    ws.packages({"msgs": ["msgs"], "driver": ["driver"], "pkg": ["msgs", "driver", "pkg"]})
+    (ws.workspace / "install" / "msgs").mkdir(parents=True)
+    (ws.workspace / "install" / "msgs" / "built").write_text("", encoding="utf-8")
+    ws.fail("driver")
+
+    assert ws.run()[0] == 1
+    assert ws.unfinished() == ["driver", "pkg"], "msgs was built before and stays usable"
+    ws.calls()
+
+    assert ws.run("msgs")[:2] == (0, "ran\n") and ws.calls() == []
+    code, out, _ = ws.run("driver")
+    assert code == 1 and "ran" not in out and len(ws.builds()) == 1
+
+
+@needs_flock
+def test_entry_leaves_a_package_built_before_markers_existed_alone(tmp_path):
+    """A workspace made by an earlier Airfield, or by colcon run by hand, has
+    no markers. Its packages are built and must not be compiled again."""
+    ws = EntryWorkspace(tmp_path)
+    (ws.workspace / "install" / "pkg").mkdir(parents=True)
+
+    assert ws.run()[:2] == (0, "ran\n")
+    assert ws.calls() == []
+
+
+@needs_flock
+def test_entry_waits_for_a_build_another_container_is_running(tmp_path):
+    """Started while the first is still compiling, the second finds
+    install/<pkg> already there. It must wait for the build and not run its
+    command against a half-built package, and then not build a second time."""
+    ws = EntryWorkspace(tmp_path)
+    (ws.fake / "slow").write_text("2", encoding="utf-8")
+
+    first = ws.start()
+    deadline = time.time() + 20
+    while not (ws.workspace / "install" / "pkg").exists():
+        assert time.time() < deadline, "the first build never started"
+        time.sleep(0.05)
+    code, out, _ = ws.run(command='test -e "$HOME/workspace/install/pkg/built" && echo complete || echo half-built')
+    first.communicate(timeout=60)
+
+    assert first.returncode == 0
+    assert (code, out.splitlines()[-1]) == (0, "complete")
+    assert len(ws.builds()) == 1, "the second container found the work done"
+
+
+@needs_flock
+def test_entry_tries_again_after_a_build_that_was_killed(tmp_path):
+    """Power loss, `docker kill`, the OOM killer: nothing gets to clean up."""
+    ws = EntryWorkspace(tmp_path)
+    (ws.fake / "slow").write_text("30", encoding="utf-8")
+
+    process = ws.start()
+    deadline = time.time() + 20
+    while not (ws.workspace / "install" / "pkg").exists():
+        assert time.time() < deadline, "the build never started"
+        time.sleep(0.05)
+    os.killpg(process.pid, signal.SIGKILL)
+    process.communicate(timeout=20)
+    assert ws.unfinished() == ["pkg"]
+    ws.calls()
+
+    (ws.fake / "slow").unlink()
+    code, out, _ = ws.run()
+    assert (code, out.splitlines()[-1]) == (0, "ran")
+    assert len(ws.builds()) == 1 and ws.unfinished() == []

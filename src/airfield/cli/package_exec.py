@@ -679,8 +679,8 @@ def _validate_and_configure_host_dependencies(pkg: Package, deps: List[Dependenc
 
 
 def container_home() -> str:
-    """In-container HOME. ``builder.py`` creates the container user from the
-    host's login name and sets ``ENV HOME=/home/$USERNAME``, so this mirrors it."""
+    """In-container HOME for the caller: ``/home/<login name>``. The image's
+    init script creates it when the container starts (see user_setup_args)."""
     username = pwd.getpwuid(os.getuid()).pw_name
     return f"/home/{username}"
 
