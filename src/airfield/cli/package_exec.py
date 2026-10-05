@@ -19,6 +19,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from airfield.builder import Builder
 from airfield.config import AIRFIELD_CONFIG, AIRFIELD_LOCAL_CONFIG, _load_yaml, dependencies_dir, dependency_search_paths, find_project_root, packages_dir, require_package_root, is_arm_mac
+from airfield.dependency_resolver import MISSING, resolve_dependencies
 from airfield.host_check import detect_host_facts, evaluate_host_dependencies
 from airfield.models import Dependency, Package, SUPPORTED_ROS_DISTROS
 
@@ -107,21 +108,52 @@ def run_container_foreground(run_cmd: List[str]) -> int:
             signal.signal(signal.SIGHUP, previous_hup)
 
 
+INIT_SCRIPT_PATH = "/opt/airfield-init.sh"
+
+
+def user_setup_args() -> List[str]:
+    """Container env args naming who the command runs as: the caller.
+
+    An image holds no account for the person using it (it could not be shared
+    between logins and machines if it did). /opt/airfield-init.sh, which every
+    command is routed through, reads these and makes the account when the
+    container starts: same name and ids as on the host, so files written to
+    the mounts are the caller's, and the same home path the mounts and the
+    plans' ``$HOME`` already point at.
+    """
+    uid = os.getuid()
+    return [
+        "-e", f"AIRFIELD_UID={uid}",
+        "-e", f"AIRFIELD_GID={os.getgid()}",
+        "-e", f"AIRFIELD_USER={pwd.getpwuid(uid).pw_name}",
+        "-e", f"AIRFIELD_HOME={container_home()}",
+    ]
+
+
 def entry_wrap_args(pkg: Optional[Package], command_text: str) -> Tuple[List[str], List[str]]:
     """Container env args + command vector for `package cmd` / `package run`.
 
-    ROS packages route through /opt/airfield-entry.sh (baked into their image),
-    which builds the target colcon package into the shared workspace if it is
-    not built yet — a no-op for apt-only tool packages and already-built ones —
-    then execs a login shell running the command. Non-ROS packages run the
-    login shell directly (their image has no entry script).
+    Every command starts in /opt/airfield-init.sh, which sets up the caller's
+    account (see user_setup_args) and hands over to the rest as that user.
+
+    ROS packages then route through /opt/airfield-entry.sh (baked into their
+    image), which builds the target colcon package into the shared workspace
+    if it is not built yet — a no-op for apt-only tool packages and
+    already-built ones — then execs a login shell running the command. Non-ROS
+    packages run the login shell directly (their image has no entry script).
     """
+    env_args = user_setup_args()
     if pkg is not None and pkg.ros_distro:
-        env_args = ["-e", f"AIRFIELD_BUILD_PKG={pkg.name}"]
+        env_args.extend(["-e", f"AIRFIELD_BUILD_PKG={pkg.name}"])
         if pkg.colcon_args:
             env_args.extend(["-e", f"AIRFIELD_COLCON_ARGS={pkg.colcon_args}"])
-        return env_args, ["/opt/airfield-entry.sh", command_text]
-    return [], ["/bin/bash", "-lc", command_text]
+        return env_args, [INIT_SCRIPT_PATH, "/opt/airfield-entry.sh", command_text]
+    return env_args, [INIT_SCRIPT_PATH, "/bin/bash", "-lc", command_text]
+
+
+def shell_wrap_args() -> Tuple[List[str], List[str]]:
+    """Container env args + command vector for an interactive login shell."""
+    return user_setup_args(), [INIT_SCRIPT_PATH, "/bin/bash", "-l"]
 
 
 def _resolve_package_ros_distro(pkg: Package, project_root: Optional[Path]) -> Optional[str]:
@@ -284,47 +316,30 @@ def resolve_package_context(
     if not source_root.exists():
         raise typer.BadParameter(f"source_path '{pkg.source_path}' does not exist in {pkg_dir}")
 
-    deps: List[Dependency] = []
-    seen_deps = set()
-    queue = list(pkg.dependencies)
+    # airfield.yaml's list plus whatever the package.xml files under
+    # source_path ask for; see dependency_resolver for how each name resolves.
+    plan = resolve_dependencies(pkg, pkg_dir, source_root, root, search_paths)
 
-    while queue:
-        dep_name = queue.pop(0)
-        if dep_name in seen_deps:
-            continue
-        seen_deps.add(dep_name)
+    missing = plan.of_kind(MISSING)
+    if missing:
+        print(f"Error: Dependency '{missing[0].name}' manifest not found in search paths:")
+        for sp in search_paths:
+            print(f"  - {sp}")
+        if root is not None:
+            print(f"  - {packages_dir(root)} (peer packages)")
+        print(f"It is listed in {missing[0].origin}. A name needs a .yaml manifest unless")
+        print("it can be translated into an apt package, which Airfield only does for packages")
+        print("that set ros_distro (through rosdep's table, else ros-<distro>-<name> or a")
+        print("Debian-style name such as python3-numpy).")
+        print("If this manifest was upstreamed recently, refresh your copy of the shared")
+        print("repository with: airfield package dependencies pull")
+        raise typer.Exit(1)
 
-        dep_path = None
-        for search_path in search_paths:
-            candidate = search_path / f"{dep_name}.yaml"
-            if candidate.exists():
-                dep_path = candidate
-                break
-                
-        if dep_path is not None:
-            deps.append(Dependency.load(dep_path))
-        else:
-            peer_pkg_dir = None
-            if root is not None:
-                candidate_peer = packages_dir(root) / dep_name
-                if (candidate_peer / AIRFIELD_CONFIG).exists():
-                    peer_pkg_dir = candidate_peer
+    # Held for the image build to print. Printing here would also write into
+    # shell completion, which resolves the package to list its run commands.
+    pkg._resolution_notes = plan.warnings()
 
-            if peer_pkg_dir is not None:
-                peer_pkg = Package.load(peer_pkg_dir / AIRFIELD_CONFIG)
-                queue.extend(peer_pkg.dependencies)
-            else:
-                print(f"Error: Dependency '{dep_name}' manifest not found in search paths:")
-                for sp in search_paths:
-                    print(f"  - {sp}")
-                if root is not None:
-                    print(f"  - {packages_dir(root)} (peer packages)")
-                print(f"Each dependency listed in airfield.yaml must have a corresponding .yaml manifest.")
-                print("If this manifest was upstreamed recently, refresh your copy of the shared")
-                print("repository with: airfield package dependencies pull")
-                raise typer.Exit(1)
-
-    return pkg_dir, pkg, deps, source_root
+    return pkg_dir, pkg, plan.dependencies, source_root
 
 
 def _apply_project_base_image_defaults(pkg: Package, pkg_dir: Path) -> None:
@@ -367,22 +382,205 @@ def _apply_project_base_image_defaults(pkg: Package, pkg_dir: Path) -> None:
             )
 
 
+def image_registry(pkg_dir: Path) -> Optional[str]:
+    """Where images are shared between machines, or None when they are not.
+
+    One repository holds every package's image, told apart by tag
+    (``<repository>:<package>-<fingerprint>``), so the base image's layers are
+    uploaded once and not once per package. Set ``image_registry:`` in the
+    project's airfield.yaml; ``$AIRFIELD_IMAGE_REGISTRY`` overrides it on one
+    machine, and switches sharing off there when set to ``none``.
+    """
+    value = os.environ.get("AIRFIELD_IMAGE_REGISTRY")
+    if value is None:
+        root = find_project_root(pkg_dir)
+        data = _load_yaml(root / AIRFIELD_CONFIG) if root is not None else None
+        value = (data or {}).get("image_registry")
+    if not isinstance(value, str):
+        return None
+    value = value.strip().rstrip("/")
+    if not value or value.lower() in {"none", "off", "false", "0"}:
+        return None
+    if any(ch.isspace() for ch in value) or ":" in value.rsplit("/", 1)[-1]:
+        raise typer.BadParameter(
+            f"image_registry must be a repository name without a tag, such as "
+            f"ghcr.io/my-org/my-robot (got {value!r})"
+        )
+    return value
+
+
+_FINGERPRINT_TAG = re.compile(r"^[0-9a-f]{12}$")
+
+
+def _docker(*args: str) -> Optional[str]:
+    """stdout of a quiet docker command, or None if it failed."""
+    try:
+        result = subprocess.run(["docker", *args], capture_output=True, text=True, check=False)
+    except FileNotFoundError:
+        return None
+    if result.returncode != 0 or not isinstance(result.stdout, str):
+        return None
+    return result.stdout.strip()
+
+
+def _image_id(reference: str) -> Optional[str]:
+    return _docker("image", "inspect", "--format", "{{.Id}}", reference) or None
+
+
+def _reusable_image(builder: Builder, local: str, remote: Optional[str]) -> Optional[str]:
+    """The image already on this machine for this recipe, if it can be used
+    as it is. None means it has to be fetched or built."""
+    described = _docker(
+        "image", "inspect", "--format", '{{.Id}} {{index .Config.Labels "airfield.base"}}', local
+    )
+    if not described:
+        return None
+    image_id, _, built_on = described.partition(" ")
+    base_now = _image_id(builder.base_image)
+
+    if remote and _image_id(remote) == image_id:
+        # The image the registry holds for this recipe is the one every
+        # machine sharing it runs. That is the point, so it stays in use even
+        # where this machine's copy of the base image has moved on.
+        if base_now and built_on and built_on != base_now:
+            print(
+                f"[airfield] {local} is the shared image; it was built on a different copy of "
+                f"{builder.base_image} than this machine has. To build it here instead: "
+                f"airfield package build {builder.package.name} --rebuild"
+            )
+        return local
+
+    pull, _ = builder._resolve_pull()
+    if pull:
+        # This package's builds refresh its base image from its registry.
+        # Only a build can tell whether there is a newer one.
+        return None
+    # Same recipe on the same base image: exactly the case in which
+    # `docker build` would find every layer cached and change nothing.
+    if base_now is None or built_on == base_now:
+        return local
+    return None
+
+
+def _pull_shared_image(remote: str, local: str, latest: str) -> Optional[str]:
+    """Fetch another machine's build of this recipe. None if there is none."""
+    # flush: docker writes straight to the terminal, and its lines must not
+    # overtake ours when the output is piped or logged.
+    print(f"[airfield] looking for a shared image: {remote}", flush=True)
+    if subprocess.run(["docker", "pull", remote], check=False).returncode != 0:
+        print("[airfield] no shared image for this recipe (or the registry is out of reach); building it here.")
+        return None
+    for name in (local, latest):
+        subprocess.run(["docker", "tag", remote, name], check=False)
+    print(f"[airfield] using the shared image as {local}")
+    return local
+
+
+def _push_shared_image(local: str, remote: Optional[str]) -> None:
+    if remote is None:
+        print("Error: --push needs somewhere to push to. Set image_registry: in the project's")
+        print("airfield.yaml (a repository name such as ghcr.io/my-org/my-robot), or")
+        print("$AIRFIELD_IMAGE_REGISTRY on this machine, and log in to it with `docker login`.")
+        raise typer.Exit(1)
+    print(f"[airfield] pushing {local} as {remote}", flush=True)
+    if subprocess.run(["docker", "tag", local, remote], check=False).returncode != 0:
+        raise typer.Exit(1)
+    if subprocess.run(["docker", "push", remote], check=False).returncode != 0:
+        print(f"Error: could not push {remote}. Is this machine logged in to the registry (docker login)?")
+        raise typer.Exit(1)
+
+
+def _drop_older_tags(package_name: str, tag: str, registry: Optional[str]) -> None:
+    """Untag this package's images for recipes it no longer has.
+
+    Each recipe gets its own tag, so without this every past recipe's image
+    would stay on disk for good. An image a running container still uses is
+    left alone (docker refuses to remove it).
+    """
+    stale: List[str] = []
+    for line in (_docker("images", "--format", "{{.Tag}}", f"airfield-pkg-{package_name}") or "").splitlines():
+        if _FINGERPRINT_TAG.match(line.strip()) and line.strip() != tag:
+            stale.append(f"airfield-pkg-{package_name}:{line.strip()}")
+    if registry:
+        prefix = f"{package_name}-"
+        for line in (_docker("images", "--format", "{{.Tag}}", registry) or "").splitlines():
+            line = line.strip()
+            if line.startswith(prefix) and _FINGERPRINT_TAG.match(line[len(prefix):]) and line != f"{prefix}{tag}":
+                stale.append(f"{registry}:{line}")
+    for reference in stale:
+        _docker("rmi", reference)
+
+
 def build_package_image(
     pkg_dir: Path,
     pkg: Package,
     deps: List[Dependency],
     target_device: str = "x86_64",
     show_all_output: bool = False,
+    push: bool = False,
+    rebuild: bool = False,
 ) -> str:
+    """Make sure the package's image exists and return the name to run it by.
+
+    The image is named after its recipe (``airfield-pkg-<name>:<fingerprint>``,
+    see Builder.fingerprint). So, in order: if this machine already has the
+    image for this recipe, it is used as it is; else, if the project shares
+    images through a registry and another machine has built this recipe, that
+    build is fetched; else it is built here. ``rebuild`` skips the first two
+    and builds from scratch. ``push`` uploads the result for other machines.
+    """
+    for note in pkg._resolution_notes:
+        print(f"[WARN] {note}")
     _apply_locked_dependency_versions(pkg)
     _apply_project_base_image_defaults(pkg, pkg_dir)
     _validate_and_configure_host_dependencies(pkg, deps)
 
     builder = Builder(package=pkg, dependencies=deps, target_device=target_device)
-    success, image_name = builder.build(context_dir=pkg_dir, show_all_output=show_all_output)
-    if not success:
-        raise typer.Exit(1)
-    return image_name
+
+    if is_arm_mac():
+        # Apple's `container` engine: build every time, as before. Image
+        # reuse and sharing are implemented for docker only.
+        if push:
+            print("Error: --push is only supported with the docker engine.")
+            raise typer.Exit(1)
+        success, image_name = builder.build(context_dir=pkg_dir, show_all_output=show_all_output)
+        if not success:
+            raise typer.Exit(1)
+        return image_name
+
+    tag = builder.fingerprint()
+    local = f"airfield-pkg-{pkg.name}:{tag}"
+    latest = f"airfield-pkg-{pkg.name}:latest"
+    registry = image_registry(pkg_dir)
+    remote = f"{registry}:{pkg.name}-{tag}" if registry else None
+
+    image: Optional[str] = None
+    if not rebuild:
+        image = _reusable_image(builder, local, remote)
+        if image is not None:
+            print(f"[airfield] image is up to date: {image}")
+        elif remote is not None:
+            image = _pull_shared_image(remote, local, latest)
+            if image is not None:
+                _drop_older_tags(pkg.name, tag, registry)
+
+    if image is None:
+        success, image = builder.build(
+            context_dir=pkg_dir,
+            show_all_output=show_all_output,
+            tag=tag,
+            # What the image was built from, for _reusable_image to compare
+            # with what this machine has later.
+            labels={"airfield.tag": tag, "airfield.base": _image_id(builder.base_image) or ""},
+            no_cache=rebuild,
+        )
+        if not success:
+            raise typer.Exit(1)
+        _drop_older_tags(pkg.name, tag, registry)
+
+    if push:
+        _push_shared_image(local, remote)
+    return image
 
 
 def _is_non_interactive() -> bool:
@@ -642,38 +840,6 @@ def in_airfield_container() -> bool:
     return os.environ.get("IN_AIRFIELD_CONTAINER") == "1"
 
 
-def _collect_peer_source_mounts(
-    pkg: Package, root: Path, search_paths: List[Path]
-) -> List[Tuple[str, Path]]:
-    """Recursively find peer-package dependencies: custom packages living in
-    ``packages/<name>/`` that have no dependency manifest (so they are built
-    from source rather than apt-installed). Their source must be mounted into
-    the workspace alongside the dependent package so colcon can build them
-    together — e.g. ``ut_automata`` does ``find_package(amrl_msgs)`` and needs
-    ``amrl_msgs``/``amrl_maps`` present. Build with
-    ``colcon build --packages-up-to <pkg>`` so peers compile first."""
-    peers = {}
-    seen = set()
-    queue = list(pkg.dependencies)
-    while queue:
-        dep = queue.pop(0)
-        if dep in seen:
-            continue
-        seen.add(dep)
-        # A dep resolved by a manifest is apt-installed — there's no source to mount.
-        if any((sp / f"{dep}.yaml").exists() for sp in search_paths):
-            continue
-        peer_dir = packages_dir(root) / dep
-        if not (peer_dir / AIRFIELD_CONFIG).exists():
-            continue
-        peer_pkg = Package.load(peer_dir / AIRFIELD_CONFIG)
-        peer_src = (peer_dir / peer_pkg.source_path).resolve()
-        if peer_pkg.name not in peers:
-            peers[peer_pkg.name] = peer_src
-        queue.extend(peer_pkg.dependencies)
-    return list(peers.items())
-
-
 def docker_mount_args(pkg_dir: Path, pkg: Package, source_root: Path, target_device: str) -> List[str]:
     """Build docker -v mount arguments from package source and config mounts."""
     mount_args: List[str] = []
@@ -700,12 +866,17 @@ def docker_mount_args(pkg_dir: Path, pkg: Package, source_root: Path, target_dev
         seen_mounts.add(str(host_dir))
         seen_targets.add(container_dir)
 
-    # Mount peer-package sources (custom deps built from source, e.g. amrl_msgs)
-    # so colcon can build them alongside this package via --packages-up-to.
+    # Mount peer-package sources: project packages this one depends on that have
+    # no dependency manifest, so they are built from source rather than
+    # apt-installed. colcon needs them in the workspace alongside this package
+    # (ut_automata does find_package(amrl_msgs)); --packages-up-to then compiles
+    # them first. Resolved the same way as the image's dependencies, so a peer
+    # named only in package.xml is mounted too.
     if root is not None:
-        for peer_name, peer_src in _collect_peer_source_mounts(
-            pkg, root, dependency_search_paths(root, target_device)
-        ):
+        peers = resolve_dependencies(
+            pkg, pkg_dir, source_root, root, dependency_search_paths(root, target_device)
+        ).peers
+        for peer_name, peer_src in peers:
             peer_target = container_source_mount_path(peer_name)
             if str(peer_src) in seen_mounts or not peer_src.exists():
                 continue

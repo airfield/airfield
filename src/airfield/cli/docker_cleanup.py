@@ -31,7 +31,18 @@ def cleanup_package_container_artifacts(package_root: Path) -> None:
     if is_arm_mac():
         subprocess.run([engine, "image", "rm", "-f", image_name], check=False)
     else:
-        subprocess.run([engine, "rmi", "-f", image_name], check=False)
+        # Besides :latest, the image carries a tag named after its recipe
+        # (airfield-pkg-<name>:<fingerprint>); remove whichever exist.
+        listed = subprocess.run(
+            [engine, "images", "--format", "{{.Repository}}:{{.Tag}}", f"airfield-pkg-{pkg.name}"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        names = {image_name}
+        if listed.returncode == 0 and isinstance(listed.stdout, str):
+            names.update(line.strip() for line in listed.stdout.splitlines() if line.strip())
+        subprocess.run([engine, "rmi", "-f", *sorted(names)], check=False)
 
 
 from typing import Optional

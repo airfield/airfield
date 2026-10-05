@@ -41,14 +41,7 @@ def test_builder_build_command_selection(mocker, tmp_path):
     mock_run.return_value.stdout = "Docker version 20.10.7"
     
     mock_run_progress = mocker.patch("airfield.builder.run_build_with_progress")
-    mocker.patch("airfield.builder.shutil.copytree")
 
-    # Mock os.getuid and os.getgid
-    mocker.patch("os.getuid", return_value=1000)
-    mocker.patch("os.getgid", return_value=1000)
-    mock_pwd = mocker.patch("airfield.builder.pwd.getpwuid")
-    mock_pwd.return_value.pw_name = "testuser"
-    
     # 1. On non-ARM Mac: should use docker build
     mocker.patch("airfield.builder.is_arm_mac", return_value=False)
     builder.build(context_dir=tmp_path)
@@ -246,7 +239,6 @@ def _docker_build(mocker, capsys, package):
     mocker.patch("airfield.builder.subprocess.run").return_value.returncode = 0
     progress = mocker.patch("airfield.builder.run_build_with_progress")
     progress.return_value = mocker.Mock(returncode=0)
-    mocker.patch("airfield.builder.shutil.copytree")
     capsys.readouterr()
     Builder(package=package, dependencies=[], target_device="arm64").build(context_dir=Path("."))
     return progress.call_args[1]["cmd"], capsys.readouterr().out
@@ -301,8 +293,11 @@ def test_unrecognized_no_pull_value_warns_and_falls_through(mocker, capsys, monk
 
 
 def test_pull_flag_position_is_unchanged(mocker, capsys, monkeypatch):
-    """--pull still sits between --platform and the build args."""
+    """--pull still sits right after --platform, ahead of the image name. (The
+    UID/GID/USERNAME build args that used to follow it are gone: the image no
+    longer contains the builder's account.)"""
     monkeypatch.delenv("AIRFIELD_NO_PULL", raising=False)
     cmd, _ = _docker_build(mocker, capsys, Package(name="p"))
     i = cmd.index("--pull")
-    assert cmd[i - 2] == "--platform" and cmd[i + 1] == "--build-arg"
+    assert cmd[i - 2] == "--platform" and cmd[i + 1] == "-t"
+    assert not any(arg.startswith(("UID=", "GID=", "USERNAME=")) for arg in cmd)

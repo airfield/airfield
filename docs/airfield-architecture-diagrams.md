@@ -17,7 +17,9 @@ are a **generic example** (`my_robot/`), not any specific deployment.
 > 2. An airfield **package** wraps **≥1 ROS package** (e.g. a `base_driver`
 >    package may ship `motor_driver`, `joystick`, `gui`, `lidar_launch` as
 >    separate `ros2 run/launch` targets). `package init --path` wraps an existing
->    ROS package by reading its `package.xml`.
+>    ROS package by reading its `package.xml`. That file stays the package's
+>    dependency list: every build reads it again, so `airfield.yaml` only lists
+>    what `package.xml` does not.
 
 ---
 
@@ -61,11 +63,11 @@ are a **generic example** (`my_robot/`), not any specific deployment.
    ┌──────┴──────────────┐   ┌──────┴────────────────────────────────┐
    │ init     deinit     │   │ init      deinit                       │
    │  scaffold a project │   │  new pkg, OR wrap an existing ROS pkg  │
-   │  (airfield.yaml,    │   │  (--path reads its package.xml → deps) │
+   │  (airfield.yaml,    │   │  (--path reads its package.xml → name) │
    │   kind: project)    │   │                                        │
    │                     │   │ build <pkg>                            │
    │ run <pkg>           │   │  build the container IMAGE             │
-   │  run ONE package's  │   │  (airfield-pkg-<name>:latest)          │
+   │  run ONE package's  │   │  (airfield-pkg-<name>:<fingerprint>)   │
    │  'default' command  │   │                                        │
    │  (or shell)         │   │ shell <pkg>                            │
    │                     │   │  interactive shell in the container    │
@@ -190,27 +192,40 @@ my_robot/                             ◄── PROJECT  (airfield.yaml, kind: p
 ### Build time  ( `airfield package build <pkg>`, or implicit on first run )
 
 ```
-   package airfield.yaml ─┐
-   dependencies/*.yaml ───┴──► resolve deps  (search order: local <device> →
+   package.xml (in source) ┐  what the package needs: read on EVERY build, so
+   package airfield.yaml ──┤  a <depend> added there needs no second edit;
+                           │  airfield.yaml adds only what package.xml lacks
+   dependencies/*.yaml ────┴──► resolve deps  (search order: local <device> →
                                   local xplatform → global <device> → global xplatform;
                                   peer pkgs with no manifest, e.g. my_msgs,
-                                  are mounted as source & built by colcon)
+                                  are mounted as source & built by colcon;
+                                  a name with no manifest is translated
+                                  by rosdep's table, read on the host,
+                                  e.g. eigen -> libeigen3-dev)
                                          │
                                          ▼
-                        generated Dockerfile ──► docker build ──► IMAGE
-                        FROM <base_image>                       airfield-pkg-<name>
-                        (pkg base_image → else project base_image → else ROS default)
+                        generated Dockerfile ──► fingerprint ──► IMAGE
+                        FROM <base_image>            │         airfield-pkg-<name>:<fingerprint>
+                        (pkg base_image → else       │
+                         project base_image →        ├─ already on this machine?  use it
+                         else ROS default)           ├─ in the project's image_registry?  pull it
+                                                     └─ else  docker build  (--push uploads it)
                         + apt + colcon, install the airfield CLI,
                           record the pip conflict baseline (base image state),
                           ONE batched `apt-get install` of every dep's `apt:`,
                           then dep `system:` commands (as root),
-                          matching host user + ~/workspace/src,
+                          shell rc skeleton (source ROS + workspace install),
+                          COPY /opt/airfield-init.sh and /opt/airfield-entry.sh,
+                          then, as a fixed build account (never the builder's own):
                           ONE batched `pip install` of every dep's `pip:` specs,
-                          then dep `user:` commands (custom index, GPU branch),
-                          `pip check` vs the baseline → fail on NEW conflicts,
-                          source ROS + workspace install in shell rc,
-                          COPY /opt/airfield-entry.sh
+                          dep `user:` commands (custom index, GPU branch),
+                          `pip check` vs the baseline → fail on NEW conflicts
 ```
+
+The image holds no account for whoever builds or runs it. Each container
+starts in `/opt/airfield-init.sh`, which makes the caller's account (same
+name, ids and home path as on the host) and hands the command to it. That is
+what lets one build serve every login on every machine of the same kind.
 
 Every `pip:` requirement across all dependencies goes into a single
 `pip install` so pip's resolver sees them together. Separate installs each
@@ -234,6 +249,9 @@ the build.
         each pane:   airfield package cmd <pkg> -- bash -lc "<cmd>"
             └─► docker run <image>  +  mounts: src, peer-src, shared ~/workspace,
                                             devices, group_add, GPU/Jetson runtime
+                └─► /opt/airfield-init.sh:
+                       make the caller's account (same name, ids and home
+                       path as on the host), then continue as that user
                 └─► /opt/airfield-entry.sh:
                        if <pkg> not yet in ~/workspace/install:
                            flock-serialized  colcon build --packages-up-to <pkg>

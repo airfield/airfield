@@ -2,7 +2,7 @@ import re
 import yaml
 from pathlib import Path
 from typing import Dict, List, Optional, Union
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, PrivateAttr, field_validator
 
 
 # Single source of truth for supported ROS distributions. Adding a distro is
@@ -107,6 +107,16 @@ class Dependency(BaseModel):
     system: List[str] = Field(default_factory=list)
     user: List[str] = Field(default_factory=list)
     host_dependencies: List[HostDependency] = Field(default_factory=list)
+    # Set only on a dependency Airfield made up for a name that has no
+    # manifest: the package.xml or airfield.yaml that listed it. What gets
+    # installed was then translated from the name, so a failed install is
+    # explained in those terms instead of leaving apt's bare "Unable to locate
+    # package".
+    inferred_from: Optional[str] = None
+    # ...and how the name was translated: by a rule in rosdep's table
+    # ("rosdep"), as a package released for the ROS distribution ("ros-index"),
+    # or, with neither to go on, from the shape of the name alone ("rule").
+    inferred_via: Optional[str] = None
 
     @field_validator("apt", mode="after")
     @classmethod
@@ -152,8 +162,16 @@ class Dependency(BaseModel):
 
 class Package(BaseModel):
     name: str
+    # What the image needs beyond the package.xml files under source_path,
+    # which are read on every command. Nothing in package.xml has to be
+    # repeated here. A name needs a manifest only when apt cannot install it
+    # by name (see dependency_resolver).
     dependencies: List[str] = Field(default_factory=list)
     dependency_constraints: Dict[str, str] = Field(default_factory=dict)
+    # package.xml entries to leave out of the image (rosdep's --skip-keys):
+    # for a wrapped upstream package whose manifest names something that
+    # cannot be installed and is not actually needed.
+    skip_dependencies: List[str] = Field(default_factory=list)
     source_path: str = "src"
     ros_distro: Optional[str] = None
     base_image: Optional[str] = None
@@ -169,7 +187,11 @@ class Package(BaseModel):
     devices: List[str] = Field(default_factory=list)
     group_add: List[str] = Field(default_factory=list)
     run: Dict[str, str] = Field(default_factory=dict)
-    
+    # Not configuration: remarks from dependency resolution (a package.xml
+    # entry that was ignored, a package.xml that could not be read), kept
+    # until the image build prints them.
+    _resolution_notes: List[str] = PrivateAttr(default_factory=list)
+
     @classmethod
     def load(cls, path: Path) -> "Package":
         with open(path, "r") as f:
@@ -186,6 +208,9 @@ class Package(BaseModel):
 
         data["dependencies"] = cleaned_deps
         data["dependency_constraints"] = constraints
+        data["skip_dependencies"] = [
+            str(s).strip() for s in (data.get("skip_dependencies") or []) if str(s).strip()
+        ]
 
         ros_distro = data.get("ros_distro")
         if isinstance(ros_distro, str):

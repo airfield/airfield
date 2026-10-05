@@ -112,3 +112,36 @@ def pull():
         typer.echo(f"Error updating packages repository: {exc}")
         raise typer.Exit(1)
     typer.echo(f"Packages repository up to date at {repo}")
+    _refresh_name_tables()
+
+
+def _refresh_name_tables() -> None:
+    """Fetch rosdep's table again for every ROS distribution in use here.
+
+    The table is what translates a name that has no manifest. It is never
+    refreshed behind the user's back (images would change from one day to the
+    next), so this is the one place it is brought up to date.
+    """
+    from airfield import rosdep_table
+    from airfield.config import AIRFIELD_CONFIG, _load_yaml
+
+    if not rosdep_table.enabled():
+        return
+
+    distros = set(rosdep_table.cached_distros())
+    for root in (find_package_root(), find_project_root()):
+        if root is None:
+            continue
+        ros_distro = (_load_yaml(root / AIRFIELD_CONFIG) or {}).get("ros_distro")
+        if isinstance(ros_distro, str) and ros_distro.strip():
+            distros.add(ros_distro.strip().lower())
+
+    for ros_distro in sorted(distros):
+        table, problem = rosdep_table.refresh(ros_distro)
+        if problem:
+            typer.echo(f"Warning: {problem}")
+        elif table is not None:
+            typer.echo(
+                f"Name table up to date: {table.describe()} "
+                f"({len(table.rules)} rosdep rules, {len(table.released)} released packages)"
+            )

@@ -11,27 +11,38 @@ from airfield.models import Package
 
 # --- entry_wrap_args -------------------------------------------------------
 
+# Every command starts in the init script, which makes the caller's account in
+# the container (tests/test_shared_images.py covers that part). What follows
+# it is what these tests are about.
+
+def _package_env(env_args):
+    """The env args that are about the package, without the caller's identity."""
+    pairs = list(zip(env_args[0::2], env_args[1::2]))
+    assert all(flag == "-e" for flag, _ in pairs)
+    return [value for _, value in pairs if not value.startswith(("AIRFIELD_UID=", "AIRFIELD_GID=", "AIRFIELD_USER=", "AIRFIELD_HOME="))]
+
+
 def test_entry_wrap_non_ros_package_runs_plain_login_shell():
     pkg = Package(name="tool_pkg")
     env_args, cmd = entry_wrap_args(pkg, "echo hi")
-    assert env_args == []
-    assert cmd == ["/bin/bash", "-lc", "echo hi"]
+    assert _package_env(env_args) == []
+    assert cmd == ["/opt/airfield-init.sh", "/bin/bash", "-lc", "echo hi"]
 
 
 def test_entry_wrap_ros_package_routes_through_entry_script():
     pkg = Package(name="ros_pkg", ros_distro="jazzy")
     env_args, cmd = entry_wrap_args(pkg, "ros2 run ros_pkg node")
-    assert env_args == ["-e", "AIRFIELD_BUILD_PKG=ros_pkg"]
-    assert cmd == ["/opt/airfield-entry.sh", "ros2 run ros_pkg node"]
+    assert _package_env(env_args) == ["AIRFIELD_BUILD_PKG=ros_pkg"]
+    assert cmd == ["/opt/airfield-init.sh", "/opt/airfield-entry.sh", "ros2 run ros_pkg node"]
 
 
 def test_entry_wrap_passes_colcon_args_env():
     pkg = Package(name="ros_pkg", ros_distro="jazzy",
                   colcon_args="--cmake-args -DCMAKE_BUILD_MODE=Hardware")
     env_args, _ = entry_wrap_args(pkg, "true")
-    assert env_args == [
-        "-e", "AIRFIELD_BUILD_PKG=ros_pkg",
-        "-e", "AIRFIELD_COLCON_ARGS=--cmake-args -DCMAKE_BUILD_MODE=Hardware",
+    assert _package_env(env_args) == [
+        "AIRFIELD_BUILD_PKG=ros_pkg",
+        "AIRFIELD_COLCON_ARGS=--cmake-args -DCMAKE_BUILD_MODE=Hardware",
     ]
 
 
