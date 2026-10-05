@@ -204,7 +204,7 @@ class EntryWorkspace:
         (self.workspace / "src").mkdir(parents=True)
         self.fake.mkdir()
         (root / "ros" / "fake").mkdir(parents=True)
-        (root / "ros" / "fake" / "setup.bash").write_text("", encoding="utf-8")
+        (root / "ros" / "fake" / "setup.bash").write_text('echo loaded >> "$FAKE/ros_loaded"\n', encoding="utf-8")
         (root / "bin").mkdir()
         colcon = root / "bin" / "colcon"
         colcon.write_text(FAKE_COLCON, encoding="utf-8")
@@ -265,6 +265,8 @@ def test_entry_builds_once_and_then_does_not_even_ask_colcon(tmp_path):
     code, out, _ = ws.run()
     assert (code, out) == (0, "ran\n")
     assert ws.calls() == [], "`colcon list` costs most of a second per container start"
+    loaded = (ws.fake / "ros_loaded").read_text(encoding="utf-8").splitlines()
+    assert loaded == ["loaded"], "and so does loading ROS: only the run that built needed it"
 
 
 @needs_flock

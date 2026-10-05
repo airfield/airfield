@@ -53,7 +53,6 @@ ws="$HOME/workspace"
 if [ -n "$pkg" ] && [ -n "${ROS_DISTRO:-}" ] \\
     && [ -f "/opt/ros/$ROS_DISTRO/setup.bash" ] && [ -d "$ws/src" ]; then
     (
-        source "/opt/ros/$ROS_DISTRO/setup.bash"
         cd "$ws" || exit 1
         mkdir -p build install log
         # A marker per package whose build was started and has not finished.
@@ -61,10 +60,16 @@ if [ -n "$pkg" ] && [ -n "${ROS_DISTRO:-}" ] \\
         # (colcon's own setup scripts skip dot-names there).
         unfinished="install/.airfield-unfinished"
         needs_build() { [ ! -e "install/$pkg" ] || [ -e "$unfinished/$pkg" ]; }
-        # needs_build comes first: it is two file tests, where `colcon list`
-        # costs most of a second on every container start.
-        if needs_build && command -v colcon >/dev/null 2>&1 \\
-            && colcon list -n 2>/dev/null | grep -qx "$pkg"; then
+        # Is the package colcon source in this workspace? Loading the ROS
+        # environment and asking colcon together cost over a second.
+        in_workspace() {
+            source "/opt/ros/$ROS_DISTRO/setup.bash"
+            colcon list -n 2>/dev/null | grep -qx "$pkg"
+        }
+        # needs_build comes first: it is two file tests, and a container
+        # whose package is built needs nothing more here (the login shell at
+        # the end loads the ROS environment for the command).
+        if needs_build && command -v colcon >/dev/null 2>&1 && in_workspace; then
             # One build at a time across containers. The lock is held until
             # this subshell ends.
             exec 9>log/.airfield_build.lock
