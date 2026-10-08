@@ -15,6 +15,19 @@ from airfield.config import (
     is_arm_mac,
     is_arm64,
 )
+from airfield.dependency_resolver import (
+    INFERRED,
+    INVALID,
+    PEER,
+    RECIPE,
+    SKIPPED,
+    VIA_ROS_INDEX,
+    VIA_ROSDEP,
+    WORKSPACE,
+    resolve_dependencies,
+)
+from airfield.models import Package
+from airfield.package_xml import PACKAGE_XML
 
 console = Console()
 
@@ -128,6 +141,84 @@ def _print_project_status(project_root: Path) -> None:
         console.print(f"plan_names: {', '.join(p.stem for p in plan_files)}")
 
 
+def _print_resolved_dependencies(
+    manifest_path: Path,
+    package_root: Path,
+    source_root: Path,
+    project_root: Optional[Path],
+    search_paths: List[Path],
+) -> None:
+    """List everything the image will contain and which file asked for it.
+
+    Dependencies come from two places (airfield.yaml and the package.xml files
+    in the source tree) and resolve in several ways, so this is where to look
+    when the image has something unexpected or lacks something expected.
+    """
+    try:
+        pkg = Package.load(manifest_path)
+        plan = resolve_dependencies(pkg, package_root, source_root, project_root, search_paths)
+    except Exception as exc:
+        console.print(f"dependencies: could not be resolved ({exc})", markup=False)
+        return
+
+    def shown(path: Path) -> str:
+        # Shortest unambiguous form: inside this package, else inside the
+        # project, else (a shared manifest) its folder and file name.
+        for base in (package_root.resolve(), project_root):
+            if base is not None and base in path.parents:
+                return str(path.relative_to(base))
+        return f"{path.parent.name}/{path.name}"
+
+    console.print(f"dependencies: {len(plan.entries)}")
+    for entry in plan.entries:
+        if entry.kind == RECIPE:
+            how = f"manifest {shown(entry.location)}"
+        elif entry.kind == PEER:
+            how = f"peer package {shown(entry.location)}, built from source"
+        elif entry.kind == WORKSPACE:
+            how = "source in this package"
+        elif entry.kind == INFERRED:
+            dep = entry.dependency
+            apt_names = " ".join(dep.apt).replace("$ROS_DISTRO", pkg.ros_distro or "")
+            if dep.pip:
+                how = f"no manifest, installed with pip as {' '.join(dep.pip)} (rosdep's table)"
+            elif not dep.apt:
+                how = "no manifest, nothing to install (rosdep's table)"
+            elif dep.inferred_via == VIA_ROSDEP:
+                how = f"no manifest, installed from apt as {apt_names} (rosdep's table)"
+            elif dep.inferred_via == VIA_ROS_INDEX:
+                how = f"no manifest, installed from apt as {apt_names} (released ROS package)"
+            else:
+                how = f"no manifest, installed from apt as {apt_names}"
+        elif entry.kind == SKIPPED:
+            how = "skipped (skip_dependencies)"
+        elif entry.kind == INVALID:
+            how = "ignored, not a valid package name"
+        else:
+            how = "missing: no manifest and no peer package"
+        asked = ", ".join(shown(path) for path in entry.requested_by)
+        console.print(f" - {entry.name}: {how} (from {asked})", markup=False)
+
+    for problem in plan.problems:
+        console.print(f"warning: {problem}", markup=False)
+
+    # An airfield.yaml entry that this package's own package.xml also lists is
+    # a second copy of the same fact; the package.xml one is enough.
+    own_yaml = package_root.resolve() / AIRFIELD_CONFIG
+    repeated = [
+        entry.name
+        for entry in plan.entries
+        if own_yaml in entry.requested_by
+        and any(path.name == PACKAGE_XML and source_root in path.parents for path in entry.requested_by)
+    ]
+    if repeated:
+        console.print(
+            f"also_in_package_xml: {', '.join(repeated)}  "
+            "(these airfield.yaml entries repeat package.xml and can be removed)",
+            markup=False,
+        )
+
+
 def _print_package_status(package_root: Path, project_root: Optional[Path], target_device: str) -> None:
     console.print("[bold]Package status[/bold]")
     console.print(f"root: {package_root}")
@@ -167,20 +258,21 @@ def _print_package_status(package_root: Path, project_root: Optional[Path], targ
     for sp in search_paths:
         console.print(f"  - {sp}")
     console.print(f"declared_dependencies: {len(dependencies)}")
-
-    if dependencies:
-        for dep in dependencies:
-            dep_exists = False
-            for sp in search_paths:
-                if (sp / f"{dep}.yaml").exists():
-                    dep_exists = True
-                    break
-            status = "ok" if dep_exists else "missing"
-            console.print(f" - {dep}: {status}")
+    _print_resolved_dependencies(manifest_path, package_root, source_root, project_root, search_paths)
 
     image_name = f"airfield-pkg-{package_name}:latest"
     docker = _docker_summary(image_name)
     console.print(f"image: {image_name}")
+    try:
+        from airfield.cli.package_exec import image_registry
+
+        registry = image_registry(package_root)
+    except Exception as exc:
+        registry = f"invalid ({exc})"
+    console.print(
+        f"image_registry: {registry or 'none (images are built on this machine)'}",
+        markup=False,
+    )
     if docker["docker_available"]:
         console.print(f"image_exists: {'yes' if docker['image_exists'] else 'no'}")
         console.print(f"containers_from_image: {docker['container_count']}")

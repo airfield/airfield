@@ -46,7 +46,9 @@ stack still comes up from a single plan.
 `airfield.yaml` at the project root is the root marker used for project
 discovery by all runtime commands. Besides `kind`, `name`, `version`, and
 `ros_distro`, it can carry an optional `base_image` (inherited by every
-package that does not set its own) and a `subprojects` map recording the
+package that does not set its own), `pull_base_image: false` for a base image
+that is built locally and exists in no registry (inherited along with the
+project's `base_image`), and a `subprojects` map recording the
 source repositories that make up the project (restored by
 `airfield subpackages checkout`). A package can also live standalone with no
 enclosing project, which is why package commands accept `.`.
@@ -64,6 +66,7 @@ dependencies:
 source_path: src
 ros_distro: jazzy          # optional
 base_image: ...           # optional; overrides the project default
+pull_base_image: false    # optional; default true (docker build --pull)
 colcon_args: ...          # optional; extra args appended to the auto colcon build
 default_workdir: ...      # optional; working dir for run/shell/cmd
 devices: [/dev/ttyACM0]   # optional; host devices passed through
@@ -72,12 +75,21 @@ run:                       # optional; named commands → ros2 run/launch
    default: ros2 run my_pkg my_node
 ```
 
-- `name` is the package identifier and determines the image name
-  (`airfield-pkg-<name>:latest`).
-- `dependencies` are names resolved against dependency manifests (see below).
-  A name with no manifest can instead resolve as a peer package under
-  `packages/`, whose source is mounted and built from source alongside this
-  one.
+- `name` is the package identifier and determines the image name:
+  `airfield-pkg-<name>:<fingerprint>`, where the fingerprint is taken from
+  everything that decides the image's contents, plus `:latest` for the most
+  recent one. An image holds nothing about who built it, so machines of the
+  same kind arrive at the same name and can share one build through the
+  project's `image_registry:` (see the README, "Building once for several
+  machines").
+- `dependencies` lists what the image needs beyond the package's own
+  `package.xml` files, which are read on every command (see
+  [Dependency model](#dependency-model)). A name resolves to a dependency
+  manifest if one exists, else to a peer package under `packages/`, whose
+  source is mounted and built from source alongside this one, else to the
+  apt package rosdep's lookup table gives for it.
+- `skip_dependencies` (optional) lists `package.xml` entries to leave out of
+  the image.
 - `source_path` is the source folder relative to the package directory.
 - `run` is a map of named commands. `package run <pkg> <name>` runs one
   (listing them when no name is given), and `project run <pkg>` runs the
@@ -108,20 +120,64 @@ mounts:
 `airfield package init --path /path/to/ros_pkg` supports in-place migration:
 
 1. Detect `package.xml` and extract the ROS package name.
-2. Extract dependency tags (`depend`, `exec_depend`, `build_depend`,
-   `buildtool_depend`, `run_depend`).
-3. Sort the dependencies into three buckets: names the ROS base image already
-   provides are dropped; names with an existing manifest or peer package are
-   kept as-is; for the rest, a local `dependencies/xplatform/` manifest is
-   generated that apt-installs `ros-<distro>-<name>`, marked for review
-   (not every ROS name has a released apt package).
-4. Write `airfield.yaml` with `source_path: .`.
+2. Write `airfield.yaml` with `source_path: .` and an empty `dependencies:`
+   list. Nothing is copied out of `package.xml`: it is read again on every
+   build, so a copy could only go stale.
+3. Print how each `package.xml` entry will be installed, so a name with no
+   manifest that is not really an apt package is noticed here.
 
 The command does not rewrite ROS Python/C++ sources. An airfield package can
 wrap one or more ROS packages; a single airfield package may ship several
 `ros2 run` / `ros2 launch` targets, named by the `run:` map.
 
 ## Dependency model
+
+A package's dependencies come from two files:
+
+- every `package.xml` under `source_path`, read on each build and run, so a
+  dependency added there reaches the image with nothing else to edit. Build
+  and run tags are read (`depend`, `build_depend`, `build_export_depend`,
+  `buildtool_depend`, `buildtool_export_depend`, `exec_depend`, `run_depend`),
+  `condition` attributes are honored, and `test_depend` / `doc_depend` are
+  left out. Files are found the way colcon finds them: a directory holding
+  `package.xml` is not searched further, and hidden or `COLCON_IGNORE`d
+  directories are skipped;
+- `dependencies:` in `airfield.yaml`, for what `package.xml` does not say.
+
+Each name resolves to the first of:
+
+1. a ROS package in the package's own source tree (nothing to install);
+2. a dependency manifest: the recipe, which also overrides steps 4 and 5;
+3. a peer package in the project, matched by folder name or by a ROS package
+   inside it, mounted and built from source. The peer's own `airfield.yaml`
+   and `package.xml` dependencies are installed in this image too, because
+   the peer is compiled here;
+4. rosdep's lookup table: what the name is called on the image's Ubuntu
+   release (`nav2_msgs` -> `ros-jazzy-nav2-msgs`, `eigen` -> `libeigen3-dev`);
+5. for a name the table does not have, the conventional apt package:
+   `ros-<distro>-<name>` for a ROS package name, the name itself for a
+   Debian-style name (`python3-serial`).
+
+Steps 4 and 5 apply to names from either file, and are why most names need no
+manifest. Manifests are for what rosdep cannot say: installs done by
+commands, installs that differ per machine, names rosdep does not know, and
+deliberate choices other than rosdep's.
+
+Step 4 reads rosdep's data files (its rules, and the packages released for
+the ROS distribution) on the host; rosdep itself is never installed or run.
+The table is fetched once into `~/.cache/airfield/rosdep/` and refreshed only
+by `airfield package dependencies pull`, so translating a name needs no
+network during a build and does not change from one day to the next. If it
+cannot be fetched, step 5 is used alone and the build says so.
+
+Steps 4 and 5 describe an image built for a ROS distribution, so they apply
+only to packages that set `ros_distro`; without it every name needs a manifest
+and a miss is an error. If apt rejects a translated name, the failed build
+names the file that listed it and the fixes: correct the name, add a manifest,
+or drop it (for a `package.xml` entry, through `skip_dependencies:`). A
+`package.xml` entry that cannot be a package name is ignored with a warning.
+`airfield status` shows, per dependency, which file asked for it and how it
+resolved.
 
 Dependency manifests are architecture-specific YAML files in the separate
 packages repository:
@@ -285,7 +341,7 @@ up = the whole stack, laid out as a tmux session.**
 1. `airfield project init` to create the project scaffold.
 2. `airfield package init <name>` to create a new package, or
    `airfield package init --path ...` to wrap an existing ROS package.
-3. Fill package source and dependency manifests.
+3. Fill package source; declare dependencies in `package.xml`.
 4. `airfield package build <name>` to build the package container image.
 5. `airfield package run <name> <run-command>` to run a named package command.
 6. `airfield package shell <name>` to open an interactive shell in the package
@@ -306,6 +362,19 @@ up = the whole stack, laid out as a tmux session.**
 - Dependency resolution is by name; version constraints other than exact pins
   are parsed but not enforced at install time, and there is no full dependency
   graph solver.
+- Names with no manifest are translated with rosdep's data, read on the host.
+  rosdep's installers other than apt and pip (source, snap, gem) are not
+  supported; a name that needs one needs a manifest.
+- Base images must be Debian or Ubuntu based: the generated build installs
+  with apt. Any ROS distribution's image works as a base, and so does a
+  vendor board image built on Ubuntu.
+- The `airfield` command inside an image needs Python 3.10 or newer. On a base
+  image with an older Python (ROS Noetic and many vendor board images are
+  Ubuntu 20.04, Python 3.8) the image is built without that command and the
+  build says so. Nothing Airfield does to a container needs it there.
+- The automatic first-run build uses colcon. A ROS 1 package gets its image
+  and its containers like any other, but its catkin workspace is built by
+  hand (`airfield package shell`).
 - `airfield project run` runs a package's `default` command when present,
   otherwise it opens an interactive shell.
 - `airfield package deinit` and `airfield project deinit` remove the affected

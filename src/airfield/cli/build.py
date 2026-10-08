@@ -9,6 +9,8 @@ def run(
     package_name: str = typer.Argument(..., help="Package name/path (use '.' for current package)"),
     target_device: str = typer.Option("arm64" if is_arm64() else "x86_64", "--target-device", help="Target architecture for dependency resolution"),
     show_all_output: bool = typer.Option(False, "--show-all-output", help="Show full Docker build output for debugging"),
+    push: bool = typer.Option(False, "--push", help="Upload the image to the project's image_registry so other machines can use it instead of building"),
+    rebuild: bool = typer.Option(False, "--rebuild", help="Build from scratch even if this machine or the registry already has the image"),
 ):
     """Build a package container image."""
     if in_airfield_container():
@@ -25,5 +27,7 @@ def run(
         deps,
         target_device=target_device,
         show_all_output=show_all_output,
+        push=push,
+        rebuild=rebuild,
     )
     print(f"Build successful: {image_name}")

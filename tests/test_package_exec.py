@@ -134,46 +134,158 @@ def test_package_cmd_implicit(cli_runner, mock_package_context, mock_docker, moc
     assert called_args[-3:] == ["/bin/bash", "-lc", "echo hello"]
 
 
-def _make_project_with_package(tmp_path, *, project_base=None, package_base=None):
+def _make_project_with_package(tmp_path, *, project_base=None, package_base=None,
+                               project_pull=None, package_pull=None):
     proj = "kind: project\nname: proj\n"
     if project_base:
         proj += f"base_image: {project_base}\n"
+    if project_pull is not None:
+        proj += f"pull_base_image: {project_pull}\n"
     (tmp_path / "airfield.yaml").write_text(proj, encoding="utf-8")
     pkg_dir = tmp_path / "packages" / "p"
     pkg_dir.mkdir(parents=True)
     pkgcfg = "kind: package\nname: p\n"
     if package_base:
         pkgcfg += f"base_image: {package_base}\n"
+    if package_pull is not None:
+        pkgcfg += f"pull_base_image: {package_pull}\n"
     (pkg_dir / "airfield.yaml").write_text(pkgcfg, encoding="utf-8")
     return pkg_dir
 
 
 def test_project_default_base_image_inherited(tmp_path):
     """A package without base_image inherits the project-level default."""
-    from airfield.cli.package_exec import _apply_project_default_base_image
+    from airfield.cli.package_exec import _apply_project_base_image_defaults
     pkg_dir = _make_project_with_package(tmp_path, project_base="my/base:1")
     pkg = Package(name="p")
     assert pkg.base_image is None
-    _apply_project_default_base_image(pkg, pkg_dir)
+    _apply_project_base_image_defaults(pkg, pkg_dir)
     assert pkg.base_image == "my/base:1"
 
 
 def test_project_default_base_image_does_not_override_explicit(tmp_path):
     """An explicit per-package base_image wins over the project default."""
-    from airfield.cli.package_exec import _apply_project_default_base_image
+    from airfield.cli.package_exec import _apply_project_base_image_defaults
     pkg_dir = _make_project_with_package(tmp_path, project_base="my/base:1")
     pkg = Package(name="p", base_image="explicit/base:2")
-    _apply_project_default_base_image(pkg, pkg_dir)
+    _apply_project_base_image_defaults(pkg, pkg_dir)
     assert pkg.base_image == "explicit/base:2"
 
 
 def test_project_default_base_image_absent_leaves_none(tmp_path):
     """No project default and no package value -> base_image stays None (ROS/ubuntu fallback)."""
-    from airfield.cli.package_exec import _apply_project_default_base_image
+    from airfield.cli.package_exec import _apply_project_base_image_defaults
     pkg_dir = _make_project_with_package(tmp_path, project_base=None)
     pkg = Package(name="p")
-    _apply_project_default_base_image(pkg, pkg_dir)
+    _apply_project_base_image_defaults(pkg, pkg_dir)
     assert pkg.base_image is None
+
+
+# --- pull_base_image ------------------------------------------------------
+
+def _load_with_defaults(pkg_dir):
+    from airfield.cli.package_exec import _apply_project_base_image_defaults
+    pkg = Package.load(pkg_dir / "airfield.yaml")
+    _apply_project_base_image_defaults(pkg, pkg_dir)
+    return pkg
+
+
+def test_pull_base_image_unset_everywhere_stays_none(tmp_path):
+    """Neither file mentions it -> None, which the builder treats as 'pull'."""
+    pkg = _load_with_defaults(_make_project_with_package(tmp_path, project_base="local/base:1"))
+    assert pkg.pull_base_image is None
+
+
+def test_project_pull_base_image_inherited_with_project_base(tmp_path):
+    """The roboracer case: project base is local-only, packages inherit both."""
+    pkg = _load_with_defaults(
+        _make_project_with_package(tmp_path, project_base="local/base:1", project_pull="false")
+    )
+    assert pkg.base_image == "local/base:1"
+    assert pkg.pull_base_image is False
+
+
+def test_project_pull_base_image_not_inherited_by_package_with_own_base(tmp_path):
+    """A package naming its own (registry) image must keep pulling it, even
+    though the project's own base is local-only."""
+    pkg = _load_with_defaults(
+        _make_project_with_package(
+            tmp_path, project_base="local/base:1", project_pull="false", package_base="ros:jazzy-ros-base"
+        )
+    )
+    assert pkg.base_image == "ros:jazzy-ros-base"
+    assert pkg.pull_base_image is None
+
+
+def test_package_with_own_local_base_can_opt_out_itself(tmp_path):
+    pkg = _load_with_defaults(
+        _make_project_with_package(tmp_path, package_base="my/local:2", package_pull="false")
+    )
+    assert pkg.pull_base_image is False
+
+
+@pytest.mark.parametrize("package_pull,expected", [("true", True), ("false", False)])
+def test_package_pull_base_image_wins_over_project(tmp_path, package_pull, expected):
+    pkg = _load_with_defaults(
+        _make_project_with_package(
+            tmp_path, project_base="local/base:1",
+            project_pull="false" if expected else "true", package_pull=package_pull,
+        )
+    )
+    assert pkg.pull_base_image is expected
+
+
+def test_project_pull_base_image_applies_to_default_image_packages(tmp_path):
+    """No project base_image: the setting still covers packages that fall
+    back to airfield's default image (e.g. an offline site)."""
+    pkg = _load_with_defaults(_make_project_with_package(tmp_path, project_pull="false"))
+    assert pkg.base_image is None
+    assert pkg.pull_base_image is False
+
+
+@pytest.mark.parametrize("written,expected", [("false", False), ("no", False), ('"false"', False), ("true", True)])
+def test_pull_base_image_accepts_yaml_and_quoted_spellings(tmp_path, written, expected):
+    pkg = _load_with_defaults(
+        _make_project_with_package(tmp_path, project_base="local/base:1", project_pull=written)
+    )
+    assert pkg.pull_base_image is expected
+
+
+def test_invalid_project_pull_base_image_is_a_clear_error(tmp_path):
+    import typer
+    pkg_dir = _make_project_with_package(tmp_path, project_base="local/base:1", project_pull="maybe")
+    with pytest.raises(typer.BadParameter, match="pull_base_image .* must be true or false"):
+        _load_with_defaults(pkg_dir)
+
+
+def test_invalid_package_pull_base_image_is_rejected(tmp_path):
+    from pydantic import ValidationError
+    pkg_dir = _make_project_with_package(tmp_path, package_pull="maybe")
+    with pytest.raises(ValidationError):
+        Package.load(pkg_dir / "airfield.yaml")
+
+
+def test_build_package_image_skips_pull_for_project_local_base(tmp_path, mocker, monkeypatch):
+    """End to end through build_package_image: project says pull_base_image:
+    false -> the docker build command has no --pull, with no env var set."""
+    from airfield.cli.package_exec import build_package_image
+    monkeypatch.delenv("AIRFIELD_NO_PULL", raising=False)
+    mocker.patch("airfield.builder.is_arm_mac", return_value=False)
+    mocker.patch("airfield.builder.subprocess.run").return_value.returncode = 0
+    progress = mocker.patch("airfield.builder.run_build_with_progress")
+    progress.return_value = mocker.Mock(returncode=0)
+    mocker.patch("airfield.cli.package_exec._validate_and_configure_host_dependencies")
+
+    pkg_dir = _make_project_with_package(tmp_path, project_base="local/base:1", project_pull="false")
+    build_package_image(pkg_dir, Package.load(pkg_dir / "airfield.yaml"), [], target_device="arm64")
+    cmd = progress.call_args[1]["cmd"]
+    assert "--pull" not in cmd
+
+    other = tmp_path / "other"
+    other.mkdir()
+    pkg_dir = _make_project_with_package(other, project_base="ros:jazzy-ros-base")
+    build_package_image(pkg_dir, Package.load(pkg_dir / "airfield.yaml"), [], target_device="arm64")
+    assert "--pull" in progress.call_args[1]["cmd"]
 
 
 def test_run_container_foreground_stops_container_on_sighup(mocker):
@@ -419,3 +531,188 @@ def test_resolve_package_context_anchors_project_on_the_package(project_with_pee
     assert pkg.name == "main"
     assert deps == [], "peer is built from source, so it contributes no dependency manifest"
     assert source_root == project_with_peer / "packages" / "main" / "src"
+
+
+# --- shared colcon workspace: build/install/log survive the --rm container ---
+#
+# The tests below that use a bare `pkg_dir` model a package with no project
+# around it, which is the $HOME/workspace fallback. Project scoping (the
+# default) is covered separately at the end of this section.
+
+@pytest.fixture
+def fake_home(tmp_path, monkeypatch):
+    """Isolate $HOME so workspace mounts resolve under tmp_path rather than
+    creating directories in the developer's real home."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("AIRFIELD_WORKSPACE", raising=False)
+    return home
+
+
+def _mount_targets(args):
+    """Container-side destinations from a `-v host:container` argument list."""
+    return [val.split(":", 1)[1] for flag, val in zip(args, args[1:]) if flag == "-v"]
+
+
+def test_workspace_is_shared_without_any_air_config(temp_workspace, fake_home):
+    """The fresh-clone case: no .air anywhere. Core must still persist
+    build/install/log. Otherwise the workspace dies with the --rm container, so
+    every pane recompiles AND the entry script's build lock
+    (log/.airfield_build.lock) is private to each container -- panes then all
+    compile concurrently, which OOM-reboots a memory-lean host."""
+    from airfield.cli.package_exec import container_home, docker_mount_args
+
+    pkg_dir = temp_workspace / "pkg"
+    pkg_dir.mkdir()
+    assert not (pkg_dir / ".air").exists(), "fixture must model a clone with no local config"
+
+    args = docker_mount_args(pkg_dir, Package(name="p"), pkg_dir, "x86_64")
+    joined = " ".join(args)
+    for name in ("build", "install", "log"):
+        assert f"{fake_home}/workspace/{name}:{container_home()}/workspace/{name}" in joined
+
+
+def test_workspace_dirs_are_created_when_missing(temp_workspace, fake_home):
+    """Docker creates a missing -v source itself, but as root -- which leaves the
+    container's non-root user unable to write into its own workspace."""
+    from airfield.cli.package_exec import docker_mount_args
+
+    pkg_dir = temp_workspace / "pkg"
+    pkg_dir.mkdir()
+    assert not (fake_home / "workspace").exists()
+
+    docker_mount_args(pkg_dir, Package(name="p"), pkg_dir, "x86_64")
+
+    for name in ("build", "install", "log"):
+        assert (fake_home / "workspace" / name).is_dir()
+
+
+def test_air_listing_workspace_does_not_duplicate_the_mount(temp_workspace, fake_home):
+    """Machines set up before this moved into core still list the workspace dirs
+    in .air. Two -v args on one destination make docker fail the whole run with
+    "Duplicate mount point", so the pre-existing entry must collapse into one."""
+    from airfield.cli.package_exec import container_home, docker_mount_args
+
+    pkg_dir = temp_workspace / "pkg"
+    pkg_dir.mkdir()
+    (pkg_dir / ".air").write_text(
+        "mounts:\n  - ~/workspace/build\n  - ~/workspace/install\n  - ~/workspace/log\n",
+        encoding="utf-8",
+    )
+
+    args = docker_mount_args(pkg_dir, Package(name="p"), pkg_dir, "x86_64")
+    targets = _mount_targets(args)
+
+    assert len(targets) == len(set(targets)), f"duplicate mount destination in {targets}"
+    for name in ("build", "install", "log"):
+        assert targets.count(f"{container_home()}/workspace/{name}") == 1
+
+
+def test_workspace_sharing_can_be_opted_out(temp_workspace, fake_home, monkeypatch):
+    """AIRFIELD_WORKSPACE=none restores throwaway per-container workspaces, for
+    hosts that want isolation over reuse."""
+    from airfield.cli.package_exec import docker_mount_args
+
+    monkeypatch.setenv("AIRFIELD_WORKSPACE", "none")
+    pkg_dir = temp_workspace / "pkg"
+    pkg_dir.mkdir()
+
+    args = docker_mount_args(pkg_dir, Package(name="p"), pkg_dir, "x86_64")
+
+    assert "workspace/install" not in " ".join(args)
+    assert not (fake_home / "workspace").exists(), "opted out: nothing created on the host"
+
+
+def test_workspace_root_can_be_relocated(temp_workspace, fake_home, monkeypatch):
+    """AIRFIELD_WORKSPACE=<path> repoints the host side, which is also how
+    several projects can deliberately share one build tree."""
+    from airfield.cli.package_exec import container_home, docker_mount_args
+
+    alt = temp_workspace / "alt_ws"
+    monkeypatch.setenv("AIRFIELD_WORKSPACE", str(alt))
+    pkg_dir = temp_workspace / "pkg"
+    pkg_dir.mkdir()
+
+    args = docker_mount_args(pkg_dir, Package(name="p"), pkg_dir, "x86_64")
+    joined = " ".join(args)
+
+    assert f"{alt}/install:{container_home()}/workspace/install" in joined
+    assert f"{fake_home}/workspace" not in joined
+
+
+def _project(root: Path, pkg_name: str) -> Path:
+    """A minimal project containing one package, returning the package dir."""
+    pkg_dir = root / "packages" / pkg_name
+    (pkg_dir / "src").mkdir(parents=True)
+    (root / "airfield.yaml").write_text(f"kind: project\nname: {root.name}\n", encoding="utf-8")
+    (pkg_dir / "airfield.yaml").write_text(f"name: {pkg_name}\nsource_path: src\n", encoding="utf-8")
+    return pkg_dir
+
+
+def test_workspace_is_scoped_to_the_project(temp_workspace, fake_home):
+    """The default root is <project>/.airfield/workspace, not a machine-wide
+    directory. .airfield/ is already gitignored by `project init`, so build
+    output stays out of version control without extra setup."""
+    from airfield.cli.package_exec import container_home, docker_mount_args
+
+    pkg_dir = _project(temp_workspace / "proj", "base_driver")
+
+    args = docker_mount_args(pkg_dir, Package(name="base_driver"), pkg_dir / "src", "x86_64")
+    joined = " ".join(args)
+
+    ws = temp_workspace / "proj" / ".airfield" / "workspace"
+    for name in ("build", "install", "log"):
+        assert f"{ws}/{name}:{container_home()}/workspace/{name}" in joined
+        assert (ws / name).is_dir()
+    assert not (fake_home / "workspace").exists(), "must not fall back to $HOME inside a project"
+
+
+def test_two_projects_do_not_share_a_workspace(temp_workspace, fake_home):
+    """The bug this scoping prevents: two projects that both define a package
+    called `base_driver` would otherwise resolve to one install/base_driver, and
+    the second project's entry script would find the name already built, skip
+    the build, and source the first project's binaries."""
+    from airfield.cli.package_exec import docker_mount_args
+
+    a = _project(temp_workspace / "proj_a", "base_driver")
+    b = _project(temp_workspace / "proj_b", "base_driver")
+
+    args_a = docker_mount_args(a, Package(name="base_driver"), a / "src", "x86_64")
+    args_b = docker_mount_args(b, Package(name="base_driver"), b / "src", "x86_64")
+
+    def install_source(args):
+        return [v.split(":", 1)[0] for f, v in zip(args, args[1:])
+                if f == "-v" and v.split(":", 1)[1].endswith("/workspace/install")]
+
+    assert install_source(args_a) != install_source(args_b)
+    assert install_source(args_a) == [str(temp_workspace / "proj_a" / ".airfield" / "workspace" / "install")]
+
+
+def test_project_scoping_is_anchored_on_the_package_not_the_cwd(temp_workspace, fake_home, monkeypatch):
+    """Panes run `airfield package cmd` from wherever tmux put them, so resolving
+    the root from the CWD would give one package two different workspaces."""
+    from airfield.cli.package_exec import docker_mount_args
+
+    pkg_dir = _project(temp_workspace / "proj", "base_driver")
+    outside = temp_workspace / "elsewhere"
+    outside.mkdir()
+    monkeypatch.chdir(outside)
+
+    args = docker_mount_args(pkg_dir, Package(name="base_driver"), pkg_dir / "src", "x86_64")
+
+    ws = temp_workspace / "proj" / ".airfield" / "workspace"
+    assert f"{ws}/install" in " ".join(args)
+
+
+def test_env_override_still_wins_inside_a_project(temp_workspace, fake_home, monkeypatch):
+    """Opting out has to work in a project too, since that is where plans run."""
+    from airfield.cli.package_exec import docker_mount_args
+
+    pkg_dir = _project(temp_workspace / "proj", "base_driver")
+    monkeypatch.setenv("AIRFIELD_WORKSPACE", "none")
+
+    args = docker_mount_args(pkg_dir, Package(name="base_driver"), pkg_dir / "src", "x86_64")
+
+    assert "workspace/install" not in " ".join(args)
+    assert not (temp_workspace / "proj" / ".airfield").exists()

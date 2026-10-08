@@ -1,11 +1,15 @@
+import hashlib
+import json
 import os
-import pwd
-import shutil
+import re
+import shlex
 import subprocess
 import tempfile
 from importlib import metadata as importlib_metadata
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
+
+from pydantic import TypeAdapter, ValidationError
 
 from airfield.models import Dependency, Package, ROS_DISTROS
 from airfield.build_progress import run_build_with_progress, with_plain_progress
@@ -28,6 +32,10 @@ UBUNTU_BASE_IMAGE = "ubuntu:24.04"
 # real command runs, then hands off to a login shell (whose profile sources ROS
 # + the workspace overlay). Skips the build when the package has no colcon
 # source in ~/workspace/src (apt-only/tool packages), or is already built.
+# "Built" is install/<pkg> plus no marker of an unfinished build: colcon makes
+# that folder when it starts on a package, so the folder alone is also there
+# after a build that failed or was cut short, and while another container is
+# still compiling.
 # Concurrent containers serialize on a flock in the shared log/ dir so only one
 # colcon build runs at a time (a Jetson-class host OOMs on parallel builds);
 # make/cmake parallelism defaults are derived from the host (cores, capped by
@@ -45,31 +53,278 @@ ws="$HOME/workspace"
 if [ -n "$pkg" ] && [ -n "${ROS_DISTRO:-}" ] \\
     && [ -f "/opt/ros/$ROS_DISTRO/setup.bash" ] && [ -d "$ws/src" ]; then
     (
-        source "/opt/ros/$ROS_DISTRO/setup.bash"
         cd "$ws" || exit 1
         mkdir -p build install log
-        if command -v colcon >/dev/null 2>&1 \\
-            && colcon list -n 2>/dev/null | grep -qx "$pkg" \\
-            && [ ! -e "install/$pkg" ]; then
-            echo "[airfield-entry] building '$pkg' into $ws/install (first run)..."
-            # Default build parallelism: one job per core, capped by ~4GB RAM
-            # per job (protects memory-lean boards; big hosts get full cores).
-            cores=$(nproc 2>/dev/null || echo 2)
-            mem_kb=$(awk '/MemTotal/ {print $2}' /proc/meminfo 2>/dev/null || echo 8388608)
-            mem_jobs=$(( mem_kb / 4194304 ))
-            [ "$mem_jobs" -lt 1 ] && mem_jobs=1
-            jobs=$(( cores < mem_jobs ? cores : mem_jobs ))
-            export MAKEFLAGS="${MAKEFLAGS:--j$jobs}"
-            export CMAKE_BUILD_PARALLEL_LEVEL="${CMAKE_BUILD_PARALLEL_LEVEL:-$jobs}"
-            # shellcheck disable=SC2086
-            flock log/.airfield_build.lock \\
+        # A marker per package whose build was started and has not finished.
+        # Inside install/, so that it lives and dies with what it describes
+        # (colcon's own setup scripts skip dot-names there).
+        unfinished="install/.airfield-unfinished"
+        needs_build() { [ ! -e "install/$pkg" ] || [ -e "$unfinished/$pkg" ]; }
+        # Is the package colcon source in this workspace? Loading the ROS
+        # environment and asking colcon together cost over a second.
+        in_workspace() {
+            source "/opt/ros/$ROS_DISTRO/setup.bash"
+            colcon list -n 2>/dev/null | grep -qx "$pkg"
+        }
+        # needs_build comes first: it is two file tests, and a container
+        # whose package is built needs nothing more here (the login shell at
+        # the end loads the ROS environment for the command).
+        if needs_build && command -v colcon >/dev/null 2>&1 && in_workspace; then
+            # One build at a time across containers. The lock is held until
+            # this subshell ends.
+            exec 9>log/.airfield_build.lock
+            flock 9
+            # Another container may have built it while this one waited.
+            if needs_build; then
+                why="first run"
+                [ -e "$unfinished/$pkg" ] && why="its last build did not finish"
+                echo "[airfield-entry] building '$pkg' into $ws/install ($why)..."
+                # Default build parallelism: one job per core, capped by ~4GB RAM
+                # per job (protects memory-lean boards; big hosts get full cores).
+                cores=$(nproc 2>/dev/null || echo 2)
+                mem_kb=$(awk '/MemTotal/ {print $2}' /proc/meminfo 2>/dev/null || echo 8388608)
+                mem_jobs=$(( mem_kb / 4194304 ))
+                [ "$mem_jobs" -lt 1 ] && mem_jobs=1
+                jobs=$(( cores < mem_jobs ? cores : mem_jobs ))
+                export MAKEFLAGS="${MAKEFLAGS:--j$jobs}"
+                export CMAKE_BUILD_PARALLEL_LEVEL="${CMAKE_BUILD_PARALLEL_LEVEL:-$jobs}"
+                # Mark what this build is about to create: the package, and
+                # the workspace packages it needs that are not built yet. One
+                # that is already built keeps running for everyone meanwhile.
+                mkdir -p "$unfinished"
+                targets="$pkg $(colcon list -n --packages-up-to "$pkg" 2>/dev/null)"
+                for name in $targets; do
+                    if [ ! -e "install/$name" ] || [ -e "$unfinished/$name" ]; then
+                        : > "$unfinished/$name"
+                    fi
+                done
+                # shellcheck disable=SC2086
                 colcon build --packages-up-to "$pkg" --parallel-workers 1 \\
-                ${AIRFIELD_COLCON_ARGS:-}
+                    ${AIRFIELD_COLCON_ARGS:-} || exit 1
+                for name in $targets; do rm -f "$unfinished/$name"; done
+            fi
         fi
     ) || { echo "[airfield-entry] build of '$pkg' failed; not running command" >&2; exit 1; }
 fi
 exec /bin/bash -lc "${1:?airfield-entry: missing command}"
 """
+
+# Baked into every image at /opt/airfield-init.sh and put in front of every
+# command Airfield runs in a container.
+#
+# An image used to contain an account for the person who built it (their login
+# name, uid, gid and home directory), which tied the image to that login on
+# that machine. Now the image holds no such account. The container starts as
+# root, this script makes the caller exist (same name, ids and home path as on
+# the host, so files on the mounts keep their owner and a plan's $HOME paths
+# still resolve), and then hands the command to that user. The same image
+# therefore serves any login on any machine.
+#
+# The home directory is put together from two things the image does carry:
+# /opt/airfield-skel, the shell start-up files with the ROS environment lines,
+# and /opt/airfield-home, where the image build ran its unprivileged installs
+# (pip's user site lives there). A file that already exists in the home is
+# never touched: it may be mounted from the host.
+INIT_SCRIPT = """#!/bin/bash
+# Generated by airfield (builder.py INIT_SCRIPT). Do not edit in-container.
+# Usage: /opt/airfield-init.sh <command> [args...]
+# Env:  AIRFIELD_UID / AIRFIELD_GID  ids to run the command as (unset: run as is)
+#       AIRFIELD_USER                login name for that uid
+#       AIRFIELD_HOME                its home directory inside the container
+uid="${AIRFIELD_UID:-}"
+gid="${AIRFIELD_GID:-$uid}"
+if [ -z "$uid" ] || [ "$(id -u)" != "0" ]; then
+    # Started by hand, or the engine already runs the container unprivileged.
+    exec "$@"
+fi
+user="${AIRFIELD_USER:-user$uid}"
+home="${AIRFIELD_HOME:-/home/$user}"
+
+if [ "$uid" != "0" ]; then
+    # Quiet on both streams: the command's own output must be all there is.
+    if ! getent group "$gid" >/dev/null 2>&1; then
+        groupadd -g "$gid" "$user" >/dev/null 2>&1 || groupadd -g "$gid" "group$gid" >/dev/null 2>&1
+    fi
+    existing="$(getent passwd "$uid" | cut -d: -f1)"
+    if [ -z "$existing" ]; then
+        useradd -u "$uid" -g "$gid" -d "$home" -M -s /bin/bash "$user" >/dev/null 2>&1 \\
+            || useradd -u "$uid" -g "$gid" -d "$home" -M -s /bin/bash "user$uid" >/dev/null 2>&1
+    else
+        # The base image already has an account with this id (ubuntu:24.04
+        # ships 'ubuntu' as 1000). Make it the caller's.
+        [ "$existing" = "$user" ] || usermod -l "$user" "$existing" >/dev/null 2>&1 || true
+        existing="$(getent passwd "$uid" | cut -d: -f1)"
+        usermod -d "$home" -g "$gid" -s /bin/bash "$existing" >/dev/null 2>&1 || true
+    fi
+    if ! getent passwd "$uid" >/dev/null 2>&1; then
+        echo "airfield-init: could not create an account for uid $uid; running as root" >&2
+        exec "$@"
+    fi
+    user="$(getent passwd "$uid" | cut -d: -f1)"
+fi
+
+mkdir -p "$home/workspace/src" 2>/dev/null
+link_or_copy() {
+    # $1: copy|link   $2: source directory   $3...: names to leave out
+    how="$1"; from="$2"; shift 2
+    [ -d "$from" ] || return 0
+    for item in "$from"/.[!.]* "$from"/*; do
+        [ -e "$item" ] || continue
+        name="${item##*/}"
+        for skip in "$@"; do [ "$name" = "$skip" ] && continue 2; done
+        if [ -e "$home/$name" ] || [ -L "$home/$name" ]; then continue; fi
+        if [ "$how" = copy ]; then
+            cp -a "$item" "$home/$name" && chown -R "$uid:$gid" "$home/$name"
+        else
+            ln -s "$item" "$home/$name" && chown -h "$uid:$gid" "$home/$name"
+        fi
+    done
+}
+link_or_copy copy /opt/airfield-skel
+link_or_copy link /opt/airfield-home .cache .bashrc .profile .bash_logout
+
+# Docker creates the directories leading to a mount as root. Hand the ones on
+# the way to Airfield's own mounts to the user, as the image used to ship
+# them. A directory that is itself a mount keeps the owner it has on the host.
+mounted="$(awk '{print $5}' /proc/self/mountinfo 2>/dev/null)"
+for dir in "$home" "$home/workspace" "$home/workspace/src"; do
+    [ -d "$dir" ] || continue
+    case "
+$mounted
+" in *"
+$dir
+"*) continue ;; esac
+    chown "$uid:$gid" "$dir"
+done
+
+# An interactive shell must own its terminal (job control, less, ssh).
+if terminal="$(tty 2>/dev/null)" && [ -c "$terminal" ]; then
+    chown "$uid" "$terminal" 2>/dev/null
+fi
+
+export HOME="$home" USER="$user" LOGNAME="$user"
+if [ "$uid" = "0" ]; then
+    exec "$@"
+fi
+# --keep-groups: the groups docker was asked to add (--group-add dialout ...)
+# are how the command reaches the robot's devices.
+if command -v setpriv >/dev/null 2>&1; then
+    exec setpriv --reuid "$uid" --regid "$gid" --keep-groups -- "$@"
+fi
+exec python3 -c 'import os, sys
+os.setgid(int(sys.argv[2])); os.setuid(int(sys.argv[1]))
+os.execvp(sys.argv[3], sys.argv[3:])' "$uid" "$gid" "$@"
+"""
+
+# The image build runs its unprivileged steps (the batched pip install, a
+# manifest's `user:` commands) as this fixed account instead of as whoever is
+# building, so their result is the same on every machine. Whatever they leave
+# in its home shows up in the caller's home at run time (see INIT_SCRIPT).
+BUILD_USER = "airfield-build"
+BUILD_UID = 61000
+BUILD_HOME = "/opt/airfield-home"
+SKEL_DIR = "/opt/airfield-skel"
+
+# Part of every image tag. Bump it when what an image means changes without
+# its recipe changing, so images built the old way are not mistaken for new.
+IMAGE_SCHEME = "2"
+
+# Airfield's own code is the last thing put into an image, so that a new
+# version of Airfield redoes that one step and leaves every dependency layer
+# as it was. Two pieces make that possible:
+#
+# - AIRFIELD_PROJECT_DIR holds a project with metadata only: the CLI's
+#   requirement list and the `airfield` command, no code. pip installs it
+#   early, where the CLI itself used to be installed, so the package's Python
+#   environment is put together exactly as before. It changes only when the
+#   requirement list does. Its version is fixed for the same reason; the real
+#   one is `airfield.__version__`, in the code.
+# - AIRFIELD_SRC_DIR receives the code at the very end. A .pth file written
+#   by the early step is what makes it importable from there.
+AIRFIELD_PROJECT_DIR = "/opt/airfield/project"
+AIRFIELD_SRC_DIR = "/opt/airfield/src"
+IMAGE_DIST_VERSION = "0+image"
+
+# The oldest Python the CLI runs on. A base image may well ship an older one
+# (ROS Noetic and many vendor board images are Ubuntu 20.04, Python 3.8). The
+# image is no less useful for it: nothing Airfield does to a container needs
+# the CLI inside it. So on such a base the `airfield` command is left out and
+# the build goes on, where it used to stop at pip's "requires a different
+# Python" and leave that base without any image at all.
+AIRFIELD_MIN_PYTHON = (3, 10)
+
+# Baked into every image at /opt/airfield-pip-check.sh and run twice during the
+# build: once to record which distributions the base image already ships broken,
+# once at the end to fail if the package's own installs broke a new one.
+#
+# Batching every `pip:` requirement into a single install lets pip's resolver
+# find a mutually-consistent set, but it only covers what went through that one
+# install. Three things sit outside it and can still collide: apt-installed
+# Python packages (most dependency manifests are apt), manifests that must run
+# their own pip command (a custom index, a GPU/CPU branch), and whatever the
+# base image shipped. `pip check` reads everything importable, so it catches the
+# seams the batched resolve structurally cannot.
+#
+# The baseline subtraction matters for portability: Airfield builds on arbitrary
+# vendor base images, and a conflict that arrived with the base image is not the
+# package author's to fix. Failing on it would make Airfield unusable on stacks
+# whose images the developer does not control.
+PIP_CHECK_SCRIPT = """#!/bin/sh
+# Generated by airfield (builder.py PIP_CHECK_SCRIPT). Do not edit in-container.
+# Usage: airfield-pip-check.sh baseline <path>
+#        airfield-pip-check.sh verify   <path> <strict|warn>
+set -u
+
+mode="${1:?airfield-pip-check: missing mode}"
+baseline="${2:?airfield-pip-check: missing baseline path}"
+
+# Names of distributions whose requirements are currently unsatisfied, sorted
+# and deduped so the baseline can be subtracted with comm(1).
+broken_names() {
+    python3 -m pip check 2>/dev/null \\
+        | grep -v '^No broken requirements found' \\
+        | awk 'NF {print $1}' \\
+        | sort -u
+}
+
+case "$mode" in
+baseline)
+    broken_names > "$baseline" 2>/dev/null || : > "$baseline"
+    ;;
+verify)
+    strict="${3:-strict}"
+    [ -f "$baseline" ] || : > "$baseline"
+    introduced=$(broken_names | comm -13 "$baseline" -)
+    [ -n "$introduced" ] || exit 0
+
+    echo "" >&2
+    echo "[airfield] Dependency conflict introduced by this package's installs:" >&2
+    python3 -m pip check 2>/dev/null | while IFS= read -r line; do
+        for name in $introduced; do
+            case "$line" in "$name "*) echo "    $line" >&2 ;; esac
+        done
+    done
+    echo "" >&2
+    echo "[airfield] These share one Python environment. Something installed outside" >&2
+    echo "[airfield] the batched resolve -- an apt manifest, a manifest running its own" >&2
+    echo "[airfield] pip command, or the base image -- replaced a version another" >&2
+    echo "[airfield] package needs. Moving the conflicting installs into 'pip:' entries" >&2
+    echo "[airfield] lets pip solve them together." >&2
+    if [ "$strict" = "warn" ]; then
+        echo "[airfield] Continuing anyway (AIRFIELD_PIP_CHECK=warn)." >&2
+        exit 0
+    fi
+    echo "[airfield] Set AIRFIELD_PIP_CHECK=warn to continue anyway, or =off to skip." >&2
+    exit 1
+    ;;
+*)
+    echo "airfield-pip-check: unknown mode '$mode'" >&2
+    exit 2
+    ;;
+esac
+"""
+
+PIP_BASELINE_PATH = "/opt/airfield-pip-baseline.txt"
 
 
 class Builder:
@@ -103,30 +358,29 @@ class Builder:
             return distro["base_image"]
         return UBUNTU_BASE_IMAGE
 
+    def _resolve_pull(self) -> Tuple[bool, str]:
+        """Whether `docker build` gets `--pull`, plus why, for the settings line.
+
+        Precedence: $AIRFIELD_NO_PULL (a one-off override, either way), then
+        the package's pull_base_image (its own, or the project's inherited by
+        _apply_project_base_image_defaults), then the default: pull. Without
+        `--pull`, Docker still downloads a base image that is missing
+        locally; it just never refreshes one it already has.
+        """
+        raw = os.environ.get("AIRFIELD_NO_PULL", "").strip()
+        if raw:
+            try:
+                no_pull = TypeAdapter(bool).validate_python(raw)
+            except ValidationError:
+                print(f"[WARN] Ignoring AIRFIELD_NO_PULL={raw!r}: expected 1/0, true/false or yes/no.")
+            else:
+                return (not no_pull, f"AIRFIELD_NO_PULL={raw}")
+        if self.package.pull_base_image is False:
+            return (False, "pull_base_image: false")
+        return (True, "")
+
     def _resolve_docker_platform(self) -> Optional[str]:
         return DOCKER_PLATFORMS.get(self.target_device.strip().lower())
-
-    def _find_airfield_repo(self, context_dir: Path) -> Optional[Path]:
-        # Candidates for the airfield repository root:
-        # 1. The context directory and its parents
-        # 2. The directory where the airfield source code resides (3 levels up from this file: src/airfield/builder.py)
-        candidates = [context_dir, *context_dir.parents]
-        try:
-            candidates.append(Path(__file__).resolve().parents[2])
-        except (IndexError, ValueError):
-            pass
-
-        for candidate in candidates:
-            if not candidate.exists():
-                continue
-            # Check if the candidate itself is the repo root
-            if (candidate / "pyproject.toml").exists() and (candidate / "src" / "airfield").exists():
-                return candidate
-            # Check if there is an 'airfield' subdirectory that is the repo root
-            repo_root = candidate / "airfield"
-            if repo_root.exists() and (repo_root / "pyproject.toml").exists() and (repo_root / "src" / "airfield").exists():
-                return repo_root
-        return None
 
     def _airfield_runtime_requirements(self) -> List[str]:
         """Runtime requirements of the installed airfield distribution.
@@ -149,47 +403,24 @@ class Builder:
         runtime = [r for r in reqs if "extra ==" not in r]
         return runtime or fallback
 
-    def _stage_airfield_source(self, context_dir: Path, build_root: Path) -> None:
-        """Stage the running airfield CLI into the build context at build_root/airfield.
+    def _airfield_pyproject(self) -> str:
+        """The project pip installs for the running CLI: what it requires and
+        the `airfield` command, and none of its code (see AIRFIELD_SRC_DIR).
 
-        The image must run THIS airfield, never `pip install airfield` from PyPI:
-        the PyPI name is owned by an unrelated project ("AirField", a pydantic
-        forms library), so a registry install puts wrong third-party code in
-        every image. When a source checkout is visible (developer install) copy
-        it; otherwise reconstruct an installable project from the imported
-        package so pipx/venv installs work identically.
-        """
-        airfield_repo = self._find_airfield_repo(context_dir)
-        if airfield_repo is not None:
-            shutil.copytree(
-                airfield_repo,
-                build_root / "airfield",
-                ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc", "build", "dist", "*.egg-info"),
-            )
-            return
-
-        import airfield as airfield_pkg
-
-        pkg_src = Path(airfield_pkg.__file__).resolve().parent
-        dest_root = build_root / "airfield"
-        shutil.copytree(
-            pkg_src,
-            dest_root / "src" / "airfield",
-            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
-        )
-
-        version = getattr(airfield_pkg, "__version__", "0.0.0")
-        requirements = ",\n    ".join(f'"{req}"' for req in self._airfield_runtime_requirements())
-        (dest_root / "pyproject.toml").write_text(
-            f"""[build-system]
+        Nothing here may follow the code, or every edit to Airfield would
+        again reinstall each package's dependencies."""
+        # json.dumps gives a valid TOML string whatever a requirement holds
+        # (an environment marker carries double quotes).
+        requirements = ",\n    ".join(json.dumps(req) for req in self._airfield_runtime_requirements())
+        return f"""[build-system]
 requires = ["setuptools>=64.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "airfield"
-version = "{version}"
+version = "{IMAGE_DIST_VERSION}"
 description = "The framework for reproducible robots."
-requires-python = ">=3.10"
+requires-python = ">={AIRFIELD_MIN_PYTHON[0]}.{AIRFIELD_MIN_PYTHON[1]}"
 dependencies = [
     {requirements}
 ]
@@ -198,16 +429,109 @@ dependencies = [
 airfield = "airfield.main:app"
 
 [tool.setuptools]
-package-dir = {{"" = "src"}}
+packages = []
+"""
 
-[tool.setuptools.packages.find]
-where = ["src"]
+    def _airfield_source_files(self) -> List[Tuple[str, bytes]]:
+        """(path, content) of everything staged as the image's copy of Airfield.
 
-[tool.setuptools.package-data]
-airfield = ["templates/docker/*.j2", "templates/tmux/*.j2"]
-""",
-            encoding="utf-8",
-        )
+        The image must run THIS airfield, never `pip install airfield` from
+        PyPI: the PyPI name is owned by an unrelated project ("AirField", a
+        pydantic forms library), so a registry install puts wrong third-party
+        code in every image.
+
+        Only the imported package itself is staged (under src/), next to a
+        generated project file (under project/, see _airfield_pyproject),
+        whether the CLI runs from a checkout or from an installed copy. A
+        checkout's README, docs, tests and stray files stay out, so they
+        change neither the image nor its tag: two machines on the same
+        Airfield code stage the same bytes.
+        """
+        import airfield as airfield_pkg
+
+        root = Path(airfield_pkg.__file__).resolve().parent
+        files: List[Tuple[str, bytes]] = []
+        for path in sorted(root.rglob("*")):
+            relative = path.relative_to(root)
+            if not path.is_file() or "__pycache__" in relative.parts:
+                continue
+            if path.suffix in {".pyc", ".pyo"} or path.name.startswith(".") or path.name.endswith("~"):
+                continue
+            files.append((f"src/airfield/{relative.as_posix()}", path.read_bytes()))
+        files.append(("project/pyproject.toml", self._airfield_pyproject().encode("utf-8")))
+        return files
+
+    def _stage_airfield_source(self, build_root: Path) -> None:
+        """Stage the running airfield CLI into the build context at build_root/airfield."""
+        for relative, content in self._airfield_source_files():
+            target = build_root / "airfield" / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+
+    def _build_args(self) -> List[Tuple[str, str, str]]:
+        """(docker build-arg, value, the host env var it came from)."""
+        args: List[Tuple[str, str, str]] = []
+        for docker_arg, preferred_host_env in (
+            ("TORCH_INSTALL_TARGET", "AIRFIELD_TORCH_INSTALL_TARGET"),
+            ("TORCH_VERSION", "AIRFIELD_TORCH_VERSION"),
+            ("TORCH_GPU_WHL_TAG", "AIRFIELD_TORCH_GPU_WHL_TAG"),
+        ):
+            # The AIRFIELD_-prefixed name wins when it is set at all, even to
+            # an empty string (which then means: pass nothing).
+            source = preferred_host_env
+            value = os.environ.get(preferred_host_env)
+            if value is None:
+                source = docker_arg
+                value = os.environ.get(docker_arg)
+            if value:
+                args.append((docker_arg, value, source))
+        return args
+
+    def fingerprint(self) -> str:
+        """A short name for what this image contains: its tag.
+
+        Everything that decides the image's contents goes in: the generated
+        Dockerfile (base image name, every package, every command), the build
+        arguments, the platform, and the files copied in. Nothing about who
+        builds it or where does. So two machines of the same kind get the same
+        tag for the same package and can share one image, and a machine that
+        differs (another architecture, GPU or not, another base image) gets a
+        different tag and builds its own.
+
+        The base image goes in by name, not by content: a machine cannot know
+        what another machine's copy of the base holds.
+        """
+        digest = hashlib.sha256()
+
+        def feed(label: str, data) -> None:
+            if isinstance(data, str):
+                data = data.encode("utf-8")
+            digest.update(label.encode("utf-8") + b"\0" + str(len(data)).encode() + b"\0" + data)
+
+        feed("scheme", IMAGE_SCHEME)
+        # The text with cache mounts is the canonical one. Whether this
+        # machine's engine supports them changes how the image is built, not
+        # what ends up in it.
+        dockerfile = self.generate_dockerfile(cache_mounts_enabled=True)
+        feed("dockerfile", dockerfile)
+        feed("platform", self._resolve_docker_platform() or self.target_device)
+        # A build argument only counts if some command reads it. Every image
+        # is handed the torch arguments, which come from the machine's
+        # environment and so differ between machines, yet only a package that
+        # installs torch uses them. For all the others, a machine that sets
+        # TORCH_INSTALL_TARGET=gpu and one that does not build the same image.
+        commands = "\n".join(line for line in dockerfile.splitlines() if not line.startswith("ARG "))
+        for docker_arg, value, _ in self._build_args():
+            if docker_arg in commands:
+                feed(f"arg:{docker_arg}", value)
+        feed("airfield-init.sh", INIT_SCRIPT)
+        if self.ros_distro:
+            feed("airfield-entry.sh", ENTRY_SCRIPT)
+        if self._pip_check_mode() != "off":
+            feed("airfield-pip-check.sh", PIP_CHECK_SCRIPT)
+        for relative, content in self._airfield_source_files():
+            feed(f"airfield/{relative}", content)
+        return digest.hexdigest()[:12]
 
     def _supports_cache_mounts(self) -> bool:
         if is_arm_mac():
@@ -266,12 +590,149 @@ airfield = ["templates/docker/*.j2", "templates/tmux/*.j2"]
             command += " && rm -rf /var/lib/apt/lists/*"
         return command
 
+    def _pip_check_mode(self) -> str:
+        """How a newly-introduced pip conflict is handled: strict|warn|off."""
+        raw = (os.environ.get("AIRFIELD_PIP_CHECK") or "").strip().lower()
+        if raw in {"off", "0", "false", "no", "none"}:
+            return "off"
+        if raw in {"warn", "warning", "soft"}:
+            return "warn"
+        return "strict"
+
+    def _batched_apt_packages(self) -> List[str]:
+        """Every dependency's `apt:` packages, in declaration order, deduped."""
+        packages: List[str] = []
+        seen = set()
+        for dep in self.dependencies:
+            for name in dep.apt:
+                if name not in seen:
+                    seen.add(name)
+                    packages.append(name)
+        return packages
+
+    def _batched_pip_specs(self) -> List[str]:
+        """Every dependency's `pip:` requirements, in declaration order, deduped.
+
+        Order is stable so the generated Dockerfile (and therefore the layer
+        cache) does not churn between builds. Duplicates are dropped rather than
+        passed twice; pip accepts repeats, but a package listing both `numpy`
+        and something that also declares `numpy` should produce one clean spec.
+        """
+        specs: List[str] = []
+        seen = set()
+        for dep in self.dependencies:
+            for spec in dep.pip:
+                if spec not in seen:
+                    seen.add(spec)
+                    specs.append(spec)
+        return specs
+
+    def _inferred_apt_packages(self) -> List[Tuple[Dependency, str]]:
+        """(dependency, apt package) for each name that has no manifest and
+        was translated into an apt package instead."""
+        pairs: List[Tuple[Dependency, str]] = []
+        for dep in self.dependencies:
+            if not dep.inferred_from:
+                continue
+            for name in dep.apt:
+                pairs.append((dep, name.replace("$ROS_DISTRO", self.ros_distro or "")))
+        return pairs
+
+    @staticmethod
+    def _guessed(dep: Dependency) -> bool:
+        """True when the apt name came from the shape of the dependency's name
+        alone, with neither rosdep's table nor the ROS index behind it."""
+        return dep.inferred_via in (None, "rule")
+
+    def _print_inferred_notice(self) -> None:
+        """Say what is installed without a manifest, every build.
+
+        A manifest that went missing does not stop the build when the name
+        also translates to an apt package (the lidar driver has both), so the
+        names installed this way stay visible. The guessed ones get their own
+        line: those are the ones that may be misspelled.
+        """
+        def listed(deps: List[Dependency]) -> str:
+            parts = []
+            for dep in deps:
+                names = [n.replace("$ROS_DISTRO", self.ros_distro or "") for n in dep.apt]
+                names += [f"pip:{spec}" for spec in dep.pip]
+                parts.append(f"{dep.name} ({' '.join(names) or 'nothing to install'})")
+            return ", ".join(parts)
+
+        inferred = [dep for dep in self.dependencies if dep.inferred_from]
+        known = [dep for dep in inferred if not self._guessed(dep)]
+        guessed = [dep for dep in inferred if self._guessed(dep)]
+        if known:
+            print(
+                "[airfield] no manifest for these, so they are installed as rosdep names them: "
+                + listed(known)
+            )
+        if guessed:
+            print(
+                "[airfield] no manifest for these, so they are installed from apt by name: "
+                + listed(guessed)
+            )
+
+    def _explain_inferred_install_failure(self, build_output: str) -> None:
+        """Say what to do when apt rejected a name Airfield guessed.
+
+        apt reports only the package name it could not find. The developer
+        never wrote that name: they wrote a dependency name and Airfield
+        derived the apt name from it, so the report is traced back to the
+        line they did write and to the ways of fixing it.
+        """
+        for dep, apt_name in self._inferred_apt_packages():
+            name = re.escape(apt_name)
+            rejected = re.search(
+                rf"(Unable to locate package {name}(?![A-Za-z0-9+.\-])"
+                rf"|Package '{name}' has no installation candidate"
+                rf"|Couldn't find any package by (glob|regex) '{name}')",
+                build_output,
+            )
+            if not rejected:
+                continue
+            print("")
+            print(f"[airfield] apt has no package named '{apt_name}'.")
+            print(f"[airfield] It was requested because {dep.inferred_from} lists '{dep.name}'")
+            if self._guessed(dep):
+                print("[airfield] and there is no dependency manifest by that name, so the name was")
+                print("[airfield] taken to be the apt package. Do one of these, then build again:")
+                print("[airfield]   - correct the name in that file, if it is misspelled;")
+            else:
+                print("[airfield] and there is no dependency manifest by that name, so it was")
+                print(f"[airfield] translated the way rosdep does, to '{apt_name}'. That package is")
+                print("[airfield] not in the apt sources of this base image (it may not be built")
+                print("[airfield] for this machine, or the base image is not the Ubuntu release the")
+                print("[airfield] ROS distribution is made for). Do one of these, then build again:")
+            print(f"[airfield]   - add a manifest named {dep.name}.yaml under dependencies/xplatform/")
+            print("[airfield]     that says how to install it. If one should already exist, this")
+            print("[airfield]     machine's copy of the shared manifests may be out of date:")
+            print("[airfield]     airfield package dependencies pull")
+            if Path(dep.inferred_from).name == "package.xml":
+                print(f"[airfield]   - list '{dep.name}' under skip_dependencies: in airfield.yaml, if the")
+                print("[airfield]     image does not need it.")
+            else:
+                print(f"[airfield]   - remove '{dep.name}' from that file, if the image does not need it.")
+
+    def _pip_install_command(self, specs: List[str]) -> str:
+        """One `pip install` for every batched requirement.
+
+        Specs are shell-quoted: version constraints contain '<' and '>', which
+        an unquoted shell would read as redirections. The --break-system-packages
+        retry mirrors the pip-upgrade step above -- the flag is required on PEP
+        668 distros (Ubuntu 24.04+) and unknown to pip older than 23.0.1, and
+        Airfield has to build on both.
+        """
+        quoted = " ".join(shlex.quote(spec) for spec in specs)
+        return (
+            f"python3 -m pip install --break-system-packages {quoted} || \\\n"
+            f"    python3 -m pip install {quoted}"
+        )
+
     def generate_dockerfile(self, cache_mounts_enabled: bool = True) -> str:
         lines = []
-        default_uid = os.getuid()
-        default_gid = os.getgid()
-        default_username = pwd.getpwuid(default_uid).pw_name
-        
+
         # Add optimization comment at the top
         lines.append(get_cache_optimization_comment(cache_mounts_enabled=cache_mounts_enabled))
         lines.append("")
@@ -319,21 +780,59 @@ airfield = ["templates/docker/*.j2", "templates/tmux/*.j2"]
                 "python3 -m pip install --upgrade pip || true"
             )
 
-        # Install the airfield CLI staged into the build context by
-        # _stage_airfield_source. Never install "airfield" from PyPI: that name
-        # belongs to an unrelated third-party project.
-        lines.append("COPY airfield /opt/airfield")
-        if cache_mounts_enabled:
-            lines.append(
-                "RUN --mount=type=cache,target=/root/.cache/pip \\\n"
-                "    python3 -m pip install /opt/airfield || \\\n"
-                "    python3 -m pip install --break-system-packages /opt/airfield"
+        # What the airfield CLI needs, staged into the build context by
+        # _stage_airfield_source: a project holding its requirement list and
+        # the `airfield` command, no code. Installed here, ahead of the
+        # package's own dependencies as the CLI always was, it changes only
+        # when that list does. The code is copied in at the very end; the
+        # .pth file written here is what makes it importable from there.
+        # Never install "airfield" from PyPI: that name belongs to an
+        # unrelated third-party project.
+        lines.append(f"COPY airfield/project {AIRFIELD_PROJECT_DIR}")
+        pip_install = "python3 -m pip install" if cache_mounts_enabled else "python3 -m pip install --no-cache-dir"
+        oldest = f"{AIRFIELD_MIN_PYTHON[0]}.{AIRFIELD_MIN_PYTHON[1]}"
+        lines.append(
+            ("RUN --mount=type=cache,target=/root/.cache/pip \\\n    " if cache_mounts_enabled else "RUN ")
+            # A base image with an older Python still gets its image, without
+            # the `airfield` command in it (see AIRFIELD_MIN_PYTHON).
+            + f"if python3 -c 'import sys; sys.exit(sys.version_info < {AIRFIELD_MIN_PYTHON})'; then \\\n"
+            f"    ({pip_install} {AIRFIELD_PROJECT_DIR} || \\\n"
+            f"    {pip_install} --break-system-packages {AIRFIELD_PROJECT_DIR}) && \\\n"
+            "    site_dir=\"$(python3 -c 'import site; print(site.getsitepackages()[0])')\" && \\\n"
+            f"    mkdir -p \"$site_dir\" && echo {AIRFIELD_SRC_DIR} > \"$site_dir/airfield-src.pth\"; \\\n"
+            "    else \\\n"
+            f"    echo \"[airfield] This base image has $(python3 -V 2>&1), older than the {oldest} the airfield command needs.\" && \\\n"
+            "    echo \"[airfield] The command is left out of the image. Everything else is built as usual.\"; \\\n"
+            "    fi"
+        )
+
+        pip_check_mode = self._pip_check_mode()
+        if pip_check_mode != "off":
+            # The baseline must be recorded before any dependency install
+            # runs: everything broken from here on is attributable to this
+            # package. This script is copied here, and not with Airfield's
+            # other files at the end, because the build itself runs it.
+            lines.append("COPY airfield-pip-check.sh /opt/airfield-pip-check.sh")
+            lines.append("RUN chmod 755 /opt/airfield-pip-check.sh")
+            lines.append(f"RUN /opt/airfield-pip-check.sh baseline {PIP_BASELINE_PATH}")
+
+        # One install for every batched apt package, before the escape-hatch
+        # commands below. A manifest that must add a third-party repository has
+        # to keep both the repo setup and its install in `system:`, since the
+        # batch runs first and would not see the new source.
+        apt_packages = self._batched_apt_packages()
+        if apt_packages:
+            dep_apt_install = self._apt_install_command(
+                apt_packages, cache_mounts_enabled=cache_mounts_enabled
             )
-        else:
-            lines.append(
-                "RUN python3 -m pip install --no-cache-dir /opt/airfield || "
-                "python3 -m pip install --no-cache-dir --break-system-packages /opt/airfield"
-            )
+            if cache_mounts_enabled:
+                lines.append(
+                    "RUN --mount=type=cache,target=/var/lib/apt,sharing=locked \\\n"
+                    "    --mount=type=cache,target=/var/cache/apt,sharing=locked \\\n"
+                    f"    {dep_apt_install}"
+                )
+            else:
+                lines.append(f"RUN {dep_apt_install}")
 
         system_cmds = []
         for dep in self.dependencies:
@@ -352,37 +851,54 @@ airfield = ["templates/docker/*.j2", "templates/tmux/*.j2"]
                 else:
                     lines.append(f"RUN {cmd}")
 
-        lines.append(f"ARG USERNAME={default_username}")
-        lines.append(f"ARG UID={default_uid}")
-        lines.append(f"ARG GID={default_gid}")
-        lines.append(
-            "RUN set -e && "
-            "(getent group $GID || groupadd -g $GID $USERNAME) >/dev/null && "
-            "if id -u $UID >/dev/null 2>&1; then "
-            "existing_user=$(id -nu $UID) && "
-            "usermod -l $USERNAME -d /home/$USERNAME -m $existing_user 2>/dev/null || true && "
-            "usermod -g $GID $USERNAME 2>/dev/null || true; "
-            "else "
-            "useradd --uid $UID --gid $GID -m $USERNAME; "
-            "fi"
-        )
         lines.append("RUN git config --system --add safe.directory '*'")
-        lines.append("RUN mkdir -p /home/$USERNAME/workspace/src && chown -R $UID:$GID /home/$USERNAME")
-        if self.ros_distro:
-            lines.append(
-                "RUN printf '%s\\n' 'source /opt/ros/$ROS_DISTRO/setup.bash' >> /home/$USERNAME/.bashrc && "
-                "printf '%s\\n' 'if [ -f $HOME/workspace/install/setup.bash ]; then source $HOME/workspace/install/setup.bash; fi' >> /home/$USERNAME/.bashrc && "
-                "printf '%s\\n' 'colcon_build() { mkdir -p log && colcon build \"$@\"; }' >> /home/$USERNAME/.bashrc && "
-                "printf '%s\\n' 'source /opt/ros/$ROS_DISTRO/setup.bash' >> /home/$USERNAME/.profile && "
-                "printf '%s\\n' 'if [ -f $HOME/workspace/install/setup.bash ]; then source $HOME/workspace/install/setup.bash; fi' >> /home/$USERNAME/.profile"
-            )
-            # Build-if-needed command wrapper used by `package cmd`/`package run`.
-            lines.append("COPY airfield-entry.sh /opt/airfield-entry.sh")
-            lines.append("RUN chmod 755 /opt/airfield-entry.sh")
 
-        lines.append("USER $USERNAME")
-        lines.append("ENV HOME=/home/$USERNAME")
-        lines.append("WORKDIR /home/$USERNAME/workspace")
+        # No account for the person building: the image must be the same
+        # whoever builds it, so that it can be built once and used by any
+        # login on any machine. The caller's account is made when a container
+        # starts (see INIT_SCRIPT). What the image carries instead is the home
+        # directory's starting contents, in SKEL_DIR.
+        skel = f"mkdir -p {SKEL_DIR} && (cp -a /etc/skel/. {SKEL_DIR}/ 2>/dev/null || true)"
+        if self.ros_distro:
+            skel += (
+                f" && printf '%s\\n' 'source /opt/ros/$ROS_DISTRO/setup.bash' >> {SKEL_DIR}/.bashrc && "
+                f"printf '%s\\n' 'if [ -f $HOME/workspace/install/setup.bash ]; then source $HOME/workspace/install/setup.bash; fi' >> {SKEL_DIR}/.bashrc && "
+                f"printf '%s\\n' 'colcon_build() {{ mkdir -p log && colcon build \"$@\"; }}' >> {SKEL_DIR}/.bashrc && "
+                f"printf '%s\\n' 'source /opt/ros/$ROS_DISTRO/setup.bash' >> {SKEL_DIR}/.profile && "
+                f"printf '%s\\n' 'if [ -f $HOME/workspace/install/setup.bash ]; then source $HOME/workspace/install/setup.bash; fi' >> {SKEL_DIR}/.profile"
+            )
+        lines.append(f"RUN {skel}")
+
+        # The unprivileged part of the build runs as a fixed account, with a
+        # fixed home. Idempotent, so an Airfield image can serve as a base.
+        lines.append(
+            f"RUN (getent group {BUILD_UID} >/dev/null || groupadd -g {BUILD_UID} {BUILD_USER}) && "
+            f"(getent passwd {BUILD_UID} >/dev/null || "
+            f"useradd -u {BUILD_UID} -g {BUILD_UID} -d {BUILD_HOME} -M -s /bin/bash {BUILD_USER}) && "
+            f"mkdir -p {BUILD_HOME} && chown {BUILD_UID}:{BUILD_UID} {BUILD_HOME}"
+        )
+        lines.append(f"USER {BUILD_UID}:{BUILD_UID}")
+        lines.append(f"ENV HOME={BUILD_HOME}")
+        lines.append(f"WORKDIR {BUILD_HOME}")
+
+        # One install for every batched requirement, before the escape-hatch
+        # commands below. Manifests that run their own pip command are doing
+        # something deliberate (a CUDA wheel index, a GPU/CPU branch), so they
+        # get the last word over the generic resolve.
+        #
+        # umask 0000: these installs land in BUILD_HOME, which the caller sees
+        # through links in their own home (pip's user site, ~/.local). They
+        # run as someone else by then, and must still be able to add to it.
+        user_cache_mount = (
+            f"RUN --mount=type=cache,target={BUILD_HOME}/.cache/pip,uid={BUILD_UID},gid={BUILD_UID} \\\n    "
+        )
+        pip_specs = self._batched_pip_specs()
+        if pip_specs:
+            pip_install = self._pip_install_command(pip_specs)
+            if cache_mounts_enabled:
+                lines.append(f"{user_cache_mount}umask 0000 && {pip_install}")
+            else:
+                lines.append(f"RUN umask 0000 && {pip_install}")
 
         user_cmds = []
         for dep in self.dependencies:
@@ -392,28 +908,71 @@ airfield = ["templates/docker/*.j2", "templates/tmux/*.j2"]
             for cmd in user_cmds:
                 # Optimize pip commands in user dependencies
                 if "pip" in cmd and "install" in cmd and cache_mounts_enabled:
-                    lines.append(f"RUN --mount=type=cache,target=/home/$USERNAME/.cache/pip \\\n    {cmd}")
+                    lines.append(f"{user_cache_mount}umask 0000; {cmd}")
                 else:
-                    lines.append(f"RUN {cmd}")
+                    lines.append(f"RUN umask 0000; {cmd}")
 
+        if pip_check_mode != "off":
+            # Runs as the build account, matching the user-phase installs:
+            # unprivileged pip falls back to ~/.local, which root's view of
+            # the environment would not see.
+            lines.append(
+                f"RUN /opt/airfield-pip-check.sh verify {PIP_BASELINE_PATH} {pip_check_mode}"
+            )
+
+        # A container starts as root, so that INIT_SCRIPT can make the caller's
+        # account before handing over to it.
+        lines.append("USER root")
+        lines.append("ENV HOME=/root")
+        lines.append("WORKDIR /")
         lines.append("ENV IN_AIRFIELD_CONTAINER=1")
+
+        # Airfield's own files come last. Everything above is the package's
+        # environment and none of it reads them, so a new version of Airfield
+        # redoes only these steps: seconds, where reinstalling every
+        # dependency took minutes. Nothing may follow that a package pays for.
+        lines.append("COPY airfield-init.sh /opt/airfield-init.sh")
+        lines.append("RUN chmod 755 /opt/airfield-init.sh")
+        if self.ros_distro:
+            # Build-if-needed command wrapper used by `package cmd`/`package run`.
+            lines.append("COPY airfield-entry.sh /opt/airfield-entry.sh")
+            lines.append("RUN chmod 755 /opt/airfield-entry.sh")
+        lines.append(f"COPY airfield/src {AIRFIELD_SRC_DIR}")
 
         return "\n".join(lines)
 
-    def build(self, context_dir: Path, show_all_output: bool = False) -> Tuple[bool, str]:
+    def build(
+        self,
+        context_dir: Path,
+        show_all_output: bool = False,
+        tag: Optional[str] = None,
+        labels: Optional[Dict[str, str]] = None,
+        no_cache: bool = False,
+    ) -> Tuple[bool, str]:
+        """Build the image. Returns (succeeded, the name to run it by).
+
+        The image is always tagged ``:latest``. With ``tag`` (its fingerprint)
+        it is also tagged with that, and that name is returned: it keeps
+        pointing at this exact image when a later build moves ``:latest``.
+        """
         # Docker output now streams by default; keep this parameter for CLI compatibility.
         del show_all_output
 
         image_name = f"airfield-pkg-{self.package.name}:latest"
+        tagged_name = f"airfield-pkg-{self.package.name}:{tag}" if tag else None
 
         with tempfile.TemporaryDirectory() as td:
             build_root = Path(td)
             cache_mounts_enabled = self._supports_cache_mounts()
-            self._stage_airfield_source(context_dir, build_root)
+            self._stage_airfield_source(build_root)
 
             # Always present in the build context; only COPY'd into ROS images
             # (see generate_dockerfile's ros_distro block).
             (build_root / "airfield-entry.sh").write_text(ENTRY_SCRIPT, encoding="utf-8")
+            (build_root / "airfield-init.sh").write_text(INIT_SCRIPT, encoding="utf-8")
+
+            # Likewise staged unconditionally; COPY'd unless AIRFIELD_PIP_CHECK=off.
+            (build_root / "airfield-pip-check.sh").write_text(PIP_CHECK_SCRIPT, encoding="utf-8")
 
             local_dependency_root = context_dir / "dependencies" / self.target_device
             if local_dependency_root.exists() and any(local_dependency_root.glob("**/*.yaml")):
@@ -429,10 +988,6 @@ airfield = ["templates/docker/*.j2", "templates/tmux/*.j2"]
             df_path = build_root / "Dockerfile"
             df_path.write_text(dockerfile_content, encoding="utf-8")
 
-            uid = str(os.getuid())
-            gid = str(os.getgid())
-            username = pwd.getpwuid(os.getuid()).pw_name
-
             if is_arm_mac():
                 container_archs = {
                     "arm64": "arm64",
@@ -443,42 +998,32 @@ airfield = ["templates/docker/*.j2", "templates/tmux/*.j2"]
                 cmd = [
                     "container", "build",
                     "--arch", container_archs.get(self.target_device.strip().lower(), "arm64"),
-                    "--build-arg", f"UID={uid}",
-                    "--build-arg", f"GID={gid}",
-                    "--build-arg", f"USERNAME={username}",
                     "-t", image_name,
                     "-f", str(df_path),
                     str(build_root),
                 ]
+                tagged_name = None
             else:
-                # `--pull` always refreshes the base image from a registry. Skip it
-                # when AIRFIELD_NO_PULL is set so packages can use a locally-built
-                # base image (e.g. a custom L4T base) that is not in any registry.
-                no_pull = os.environ.get("AIRFIELD_NO_PULL", "").strip().lower() in {"1", "true", "yes"}
+                # `--pull` refreshes the base image from its registry. Skipped for
+                # a locally-built base image (e.g. a custom L4T base) that exists
+                # in no registry, where the pull would fail the build.
+                pull, pull_reason = self._resolve_pull()
                 cmd = [
                     "docker", "build",
                     "--network", "host",
                     "--platform", self._resolve_docker_platform() or self.target_device,
-                    *([] if no_pull else ["--pull"]),
-                    "--build-arg", f"UID={uid}",
-                    "--build-arg", f"GID={gid}",
-                    "--build-arg", f"USERNAME={username}",
+                    *(["--pull"] if pull else []),
+                    *(["--no-cache"] if no_cache else []),
                     "-t", image_name,
+                    *(["-t", tagged_name] if tagged_name else []),
+                    *(arg for key, value in sorted((labels or {}).items()) for arg in ("--label", f"{key}={value}")),
                     "-f", str(df_path),
                     str(build_root),
                 ]
 
-            torch_build_args = [
-                ("TORCH_INSTALL_TARGET", "AIRFIELD_TORCH_INSTALL_TARGET"),
-                ("TORCH_VERSION", "AIRFIELD_TORCH_VERSION"),
-                ("TORCH_GPU_WHL_TAG", "AIRFIELD_TORCH_GPU_WHL_TAG"),
-            ]
-            for docker_arg, preferred_host_env in torch_build_args:
-                value = os.environ.get(preferred_host_env)
-                if value is None:
-                    value = os.environ.get(docker_arg)
-                if value:
-                    cmd.extend(["--build-arg", f"{docker_arg}={value}"])
+            build_args = self._build_args()
+            for docker_arg, value, _ in build_args:
+                cmd.extend(["--build-arg", f"{docker_arg}={value}"])
 
             # Enable BuildKit for optimized caching
             env = os.environ.copy()
@@ -497,13 +1042,12 @@ airfield = ["templates/docker/*.j2", "templates/tmux/*.j2"]
                 f"cache_mounts={'on' if cache_mounts_enabled else 'off'}",
             ]
             if not is_arm_mac():
-                toggles.append("pull=skipped (AIRFIELD_NO_PULL set)" if no_pull else "pull=always")
-            for docker_arg, preferred_host_env in torch_build_args:
-                for env_name in (preferred_host_env, docker_arg):
-                    if os.environ.get(env_name):
-                        toggles.append(f"{docker_arg}={os.environ[env_name]} (from ${env_name})")
-                        break
+                pull_toggle = "pull=always" if pull else "pull=skipped"
+                toggles.append(f"{pull_toggle} ({pull_reason})" if pull_reason else pull_toggle)
+            for docker_arg, value, env_name in build_args:
+                toggles.append(f"{docker_arg}={value} (from ${env_name})")
             print(f"[airfield] build settings: {'  '.join(toggles)}")
+            self._print_inferred_notice()
             print(f"Executing: {' '.join(cmd)}")
             print("--- Dockerfile ---")
             print(dockerfile_content)
@@ -543,6 +1087,7 @@ airfield = ["templates/docker/*.j2", "templates/tmux/*.j2"]
                     )
 
             if result.returncode != 0:
-                return False, image_name
+                self._explain_inferred_install_failure(f"{result.stdout or ''}\n{result.stderr or ''}")
+                return False, tagged_name or image_name
 
-            return True, image_name
+            return True, tagged_name or image_name

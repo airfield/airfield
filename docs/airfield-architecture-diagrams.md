@@ -1,4 +1,4 @@
-# Airfield architecture diagrams (ICRA paper)
+# Airfield architecture diagrams (IROS paper)
 
 ASCII wireframes / mappings to be redrawn in Canva. Two figures:
 
@@ -17,7 +17,9 @@ are a **generic example** (`my_robot/`), not any specific deployment.
 > 2. An airfield **package** wraps **≥1 ROS package** (e.g. a `base_driver`
 >    package may ship `motor_driver`, `joystick`, `gui`, `lidar_launch` as
 >    separate `ros2 run/launch` targets). `package init --path` wraps an existing
->    ROS package by reading its `package.xml`.
+>    ROS package by reading its `package.xml`. That file stays the package's
+>    dependency list: every build reads it again, so `airfield.yaml` only lists
+>    what `package.xml` does not.
 
 ---
 
@@ -61,11 +63,11 @@ are a **generic example** (`my_robot/`), not any specific deployment.
    ┌──────┴──────────────┐   ┌──────┴────────────────────────────────┐
    │ init     deinit     │   │ init      deinit                       │
    │  scaffold a project │   │  new pkg, OR wrap an existing ROS pkg  │
-   │  (airfield.yaml,    │   │  (--path reads its package.xml → deps) │
+   │  (airfield.yaml,    │   │  (--path reads its package.xml → name) │
    │   kind: project)    │   │                                        │
    │                     │   │ build <pkg>                            │
    │ run <pkg>           │   │  build the container IMAGE             │
-   │  run ONE package's  │   │  (airfield-pkg-<name>:latest)          │
+   │  run ONE package's  │   │  (airfield-pkg-<name>:<fingerprint>)   │
    │  'default' command  │   │                                        │
    │  (or shell)         │   │ shell <pkg>                            │
    │                     │   │  interactive shell in the container    │
@@ -180,7 +182,9 @@ my_robot/                             ◄── PROJECT  (airfield.yaml, kind: p
 
 
 ~/workspace/{build,install,log}       ◄── SHARED colcon workspace, mounted
-                                      same-path into EVERY container (via .air).
+                                      same-path into EVERY container by
+                                      airfield itself (host side lives at
+                                      <project>/.airfield/workspace).
                                       Built ONCE → panes only source + launch.
                                       This is "build once, launch many."
 ```
@@ -188,22 +192,60 @@ my_robot/                             ◄── PROJECT  (airfield.yaml, kind: p
 ### Build time  ( `airfield package build <pkg>`, or implicit on first run )
 
 ```
-   package airfield.yaml ─┐
-   dependencies/*.yaml ───┴──► resolve deps  (search order: local <device> →
+   package.xml (in source) ┐  what the package needs: read on EVERY build, so
+   package airfield.yaml ──┤  a <depend> added there needs no second edit;
+                           │  airfield.yaml adds only what package.xml lacks
+   dependencies/*.yaml ────┴──► resolve deps  (search order: local <device> →
                                   local xplatform → global <device> → global xplatform;
                                   peer pkgs with no manifest, e.g. my_msgs,
-                                  are mounted as source & built by colcon)
+                                  are mounted as source & built by colcon;
+                                  a name with no manifest is translated
+                                  by rosdep's table, read on the host,
+                                  e.g. eigen -> libeigen3-dev)
                                          │
                                          ▼
-                        generated Dockerfile ──► docker build ──► IMAGE
-                        FROM <base_image>                       airfield-pkg-<name>
-                        (pkg base_image → else project base_image → else ROS default)
-                        + apt + colcon, install the airfield CLI,
-                          run dep `system:` (apt) then `user:` (pip) commands,
-                          matching host user + ~/workspace/src,
-                          source ROS + workspace install in shell rc,
-                          COPY /opt/airfield-entry.sh
+                        generated Dockerfile ──► fingerprint ──► IMAGE
+                        FROM <base_image>            │         airfield-pkg-<name>:<fingerprint>
+                        (pkg base_image → else       │
+                         project base_image →        ├─ already on this machine?  use it
+                         else ROS default)           ├─ in the project's image_registry?  pull it
+                                                     └─ else  docker build  (--push uploads it)
+                        + apt + colcon, install what the airfield CLI requires,
+                          record the pip conflict baseline (base image state),
+                          ONE batched `apt-get install` of every dep's `apt:`,
+                          then dep `system:` commands (as root),
+                          shell rc skeleton (source ROS + workspace install),
+                          then, as a fixed build account (never the builder's own):
+                          ONE batched `pip install` of every dep's `pip:` specs,
+                          dep `user:` commands (custom index, GPU branch),
+                          `pip check` vs the baseline → fail on NEW conflicts,
+                          and LAST airfield's own files: /opt/airfield-init.sh,
+                          /opt/airfield-entry.sh and the CLI's code
 ```
+
+Airfield's own files go in last on purpose. Docker redoes every step after the
+first one that changed, and Airfield changes more often than a package's
+dependencies do. With its code at the end, a new Airfield redoes that one copy
+and every dependency install above it is kept.
+
+The image holds no account for whoever builds or runs it. Each container
+starts in `/opt/airfield-init.sh`, which makes the caller's account (same
+name, ids and home path as on the host) and hands the command to it. That is
+what lets one build serve every login on every machine of the same kind.
+
+Every `pip:` requirement across all dependencies goes into a single
+`pip install` so pip's resolver sees them together. Separate installs each
+solve in isolation and silently overwrite each other's versions while still
+exiting 0, which yields a green build and an image that fails at runtime.
+`apt:` is batched for the same reason and one more: apt given `-y` resolves a
+genuine conflict by REMOVING the other package (exit 0, and the result is
+dependency-consistent because nothing is broken -- something is missing), while
+one combined install fails loudly. It also collapses one index refresh per
+dependency into one per package. The
+closing `pip check` covers the seams the batch cannot reach — apt-installed
+Python packages, manifests running their own pip command, and the base image —
+and is baselined so a conflict inherited from a vendor base image does not fail
+the build.
 
 ### Launch time  ( `airfield project up <plan>` )
 
@@ -213,8 +255,12 @@ my_robot/                             ◄── PROJECT  (airfield.yaml, kind: p
         each pane:   airfield package cmd <pkg> -- bash -lc "<cmd>"
             └─► docker run <image>  +  mounts: src, peer-src, shared ~/workspace,
                                             devices, group_add, GPU/Jetson runtime
+                └─► /opt/airfield-init.sh:
+                       make the caller's account (same name, ids and home
+                       path as on the host), then continue as that user
                 └─► /opt/airfield-entry.sh:
-                       if <pkg> not yet in ~/workspace/install:
+                       if <pkg> not built yet in ~/workspace/install
+                       (a build that failed or was cut short does not count):
                            flock-serialized  colcon build --packages-up-to <pkg>
                            (one build at a time, capped parallelism → OOM-safe)
                        exec bash -lc "<cmd>"   (profile auto-sources ROS + install)
@@ -260,9 +306,11 @@ point that every pane sources. A small inset shows the plan-yaml
   project `airfield.yaml` pins the base for every package unless a package
   overrides it. This is how a whole project targets a specific board/ROS image
   from a single source of truth.
-- **`AIRFIELD_NO_PULL=1`** makes `docker build` use a local-only base image
+- **`pull_base_image: false`** makes `docker build` use a local-only base image
   (e.g. a custom board image not in any registry) instead of trying to pull it.
-  It can be exported in a plan's `pre_window` or a wrapper script.
+  Set next to `base_image:` in the project `airfield.yaml`, it travels with the
+  project to every machine. `AIRFIELD_NO_PULL` overrides it for one command
+  (`1` skips the pull, `0` forces it).
 - **Why the shared workspace + serialized build exist:** launching a plan spins
   up one container per pane, and if each pane built its own `colcon` package
   concurrently the host can run out of memory. The entry wrapper's

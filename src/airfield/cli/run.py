@@ -10,6 +10,7 @@ from airfield.cli.package_exec import (
     gpu_runtime_args,
     resolve_package_context,
     run_container_foreground,
+    shell_wrap_args,
 )
 
 console = Console()
@@ -39,7 +40,7 @@ def run(
         entry_env_args, container_cmd = entry_wrap_args(pkg, entrypoint_cmd)
     else:
         console.print("[yellow]Warning: No 'default' run command defined in airfield.yaml. Dropping into interactive shell.[/yellow]")
-        entry_env_args, container_cmd = [], ["/bin/bash", "-l"]
+        entry_env_args, container_cmd = shell_wrap_args()
 
     if is_arm_mac():
         run_cmd = [

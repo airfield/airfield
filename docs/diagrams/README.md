@@ -8,6 +8,10 @@ vocabulary of the ones before it, and they all share one example project,
 `my_robot/`, with three airfield packages called `base_driver`,
 `camera_driver`, and `nav_stack`.
 
+Diagrams 3 and 4 were drawn before airfield began reading `package.xml`
+itself and before an image could be shared between machines. The text under
+each says what the tool does now and where the drawing is behind it.
+
 ---
 
 ## 1. The command surface
@@ -48,9 +52,12 @@ root:
   make up the project.
 - **`packages/`** holds the airfield packages: each subfolder is one package,
   and each package becomes exactly one container image.
-- **`dependencies/`** holds one small YAML manifest per dependency, telling
-  airfield how to install it (apt or pip), split by architecture (`arm64/`,
-  `x86_64/`) with `xplatform/` for recipes that work everywhere.
+- **`dependencies/`** holds small YAML manifests, one for each dependency
+  that needs a recipe of its own (a source build, a pip package, an install
+  that differs per machine), split by architecture (`arm64/`, `x86_64/`) with
+  `xplatform/` for recipes that work everywhere. Most dependencies need none:
+  a name with no manifest is installed as the apt package rosdep maps it to
+  (diagram 4).
 - **`plans/`** holds descriptions of what a full launch looks like (diagram 5).
 
 The central idea in this diagram: **an airfield package wraps one *or more*
@@ -83,7 +90,12 @@ Zooming into `packages/base_driver/`: the left side is its entire
   package, `source_path: "."` skips the inner folder entirely; see `nav_stack`
   in diagram 2.)
 - **`dependencies`** are installed into the package's one shared image
-  (diagram 4); **`devices`** and **`group_add`** pass hardware through to the
+  (diagram 4). The list only has to hold what the `package.xml` files on the
+  right do not say, because airfield reads those as well, every time it
+  builds the image. `urg_node`, a driver that no `package.xml` here names, is
+  that kind of entry. The drawing also lists `rclcpp`, which repeats
+  `motor_driver`'s `package.xml`; that entry is no longer needed.
+- **`devices`** and **`group_add`** pass hardware through to the
   container (here `/dev/input` plus the dialout group for serial ports).
 - **`run:`** gives memorable names to launch commands. Note that the targets
   invoke the *inner* ROS packages' executables (`ros2 run motor_driver
@@ -106,14 +118,35 @@ Same name, unrelated jobs.
 
 **Phase 1: `airfield package build`** produces an *environment image*,
 `airfield-pkg-base_driver`. It contains a base image (package override, else
-project default, else the ROS-distro default), the apt/pip installs resolved
-from the dependency manifests, and a small entry script. No ROS source is
-compiled into the image, which is exactly why it only needs rebuilding when
-dependencies change.
+project default, else the ROS-distro default), the apt/pip installs for the
+package's dependencies, and two small scripts that run when a container
+starts. No ROS source is compiled into the image, which is exactly why it only
+needs rebuilding when dependencies change.
+
+Phase 1 now does three things the drawing does not show:
+
+- **`package.xml` is an input.** The dependency names come from every
+  `package.xml` under `source_path` as well as from `airfield.yaml`, so a
+  `<depend>` added to a ROS package reaches the image with nothing else to
+  edit.
+- **Most names need no manifest.** A name with a manifest is installed by that
+  recipe. A name without one is translated into its apt package through
+  rosdep's lookup table (`eigen` becomes `libeigen3-dev`), which airfield
+  reads on the host; rosdep itself is never installed or run.
+- **`docker build` is the last resort.** The image is tagged with a
+  fingerprint of its recipe, `airfield-pkg-base_driver:<fingerprint>`. If this
+  machine already has the image for that recipe it is used as it is; if the
+  project names an `image_registry` and another machine has pushed that
+  recipe's image, it is pulled; only otherwise is it built. Nothing about who
+  builds an image goes into it, which is what lets machines of the same kind
+  share one build.
 
 **Phase 2: every `run`/`cmd`/`shell`** starts a fresh, disposable container
 from that image. Your source is live-mounted, so edits on the host are
-instantly visible inside; nothing is rebuilt or copied. The entry script then
+instantly visible inside; nothing is rebuilt or copied. The container first
+makes an account for whoever started it, with the same name, ids and home path
+as on the host (a step the drawing leaves out), so files written to the mounts
+belong to that person on any machine. The entry script then
 decides: if `install/base_driver` already exists in the shared workspace, it
 skips straight to your command; on first run it compiles with `colcon build
 --packages-up-to base_driver`, which is where the metapackage from diagram 3

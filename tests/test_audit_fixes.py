@@ -1,37 +1,17 @@
 """Regression tests for the 2026-07 portability-audit fixes."""
 from pathlib import Path
 
-import yaml
-
 from airfield.builder import Builder
 from airfield.main import app
 from airfield.models import Package
-
-
-def _write_package_xml(pkg_dir: Path, name: str, deps):
-    dep_lines = "\n".join(f"  <depend>{d}</depend>" for d in deps)
-    pkg_dir.mkdir(parents=True, exist_ok=True)
-    (pkg_dir / "package.xml").write_text(
-        f"""<?xml version="1.0"?>
-<package format="3">
-  <name>{name}</name>
-  <version>0.0.1</version>
-  <description>test</description>
-  <maintainer email="t@t.io">t</maintainer>
-  <license>MIT</license>
-{dep_lines}
-</package>
-""",
-        encoding="utf-8",
-    )
 
 
 def test_dockerfile_never_installs_airfield_from_pypi():
     builder = Builder(package=Package(name="p", ros_distro="jazzy"), dependencies=[], target_device="arm64")
     for cache_mounts in (True, False):
         df = builder.generate_dockerfile(cache_mounts_enabled=cache_mounts)
-        assert "COPY airfield /opt/airfield" in df
-        assert "/opt/airfield" in df
+        assert "COPY airfield/project /opt/airfield/project" in df
+        assert "COPY airfield/src /opt/airfield/src" in df
         # A bare "pip install ... airfield" would fetch the squatted PyPI name.
         for line in df.splitlines():
             if "pip install" in line:
@@ -46,40 +26,24 @@ def test_dockerfile_is_slim():
     assert "zsh" not in df
 
 
-def test_stage_airfield_source_synthesizes_without_repo(tmp_path, mocker):
+def test_stage_airfield_source_stages_only_the_package(tmp_path):
+    """The image gets the running CLI's own package and a generated project
+    file, from a checkout and from an installed copy alike. A checkout's
+    README, docs and tests are not staged, so editing them changes no image.
+    The two are staged apart, because they go into the image at different
+    points (see test_airfields_own_code_is_the_last_thing_in_the_recipe)."""
     builder = Builder(package=Package(name="p"), dependencies=[], target_device="x86_64")
-    mocker.patch.object(builder, "_find_airfield_repo", return_value=None)
-    builder._stage_airfield_source(tmp_path, tmp_path / "ctx")
+    builder._stage_airfield_source(tmp_path / "ctx")
 
     staged = tmp_path / "ctx" / "airfield"
-    assert (staged / "pyproject.toml").exists()
+    assert sorted(path.name for path in staged.iterdir()) == ["project", "src"]
     assert (staged / "src" / "airfield" / "main.py").exists()
-    pyproject = (staged / "pyproject.toml").read_text(encoding="utf-8")
+    assert (staged / "src" / "airfield" / "templates" / "tmux" / "tmuxinator.yml.j2").exists()
+    assert not list(staged.rglob("__pycache__"))
+    assert [path.name for path in (staged / "project").iterdir()] == ["pyproject.toml"]
+    pyproject = (staged / "project" / "pyproject.toml").read_text(encoding="utf-8")
     assert 'name = "airfield"' in pyproject
     assert "typer" in pyproject
-
-
-def test_wrap_skips_base_deps_and_generates_manifests(cli_runner, temp_workspace, mocker):
-    # Isolate from the developer machine's real packages checkout: with no
-    # shared manifests visible, base-provided deps are dropped and the rest
-    # get generated manifests.
-    empty_repo = temp_workspace / "empty_packages_repo"
-    empty_repo.mkdir()
-    mocker.patch("airfield.config.packages_repo_root", return_value=empty_repo)
-
-    pkg_dir = temp_workspace / "my_ros_pkg"
-    _write_package_xml(pkg_dir, "my_ros_pkg", ["rclcpp", "std_msgs", "ament_cmake", "urg_node"])
-
-    result = cli_runner.invoke(app, ["package", "init", "--path", str(pkg_dir), "--ros-distro", "jazzy"])
-    assert result.exit_code == 0
-
-    data = yaml.safe_load((pkg_dir / "airfield.yaml").read_text(encoding="utf-8"))
-    # base-image-provided deps are omitted; the rest kept
-    assert data["dependencies"] == ["urg_node"]
-
-    manifest = pkg_dir / "dependencies" / "xplatform" / "urg_node.yaml"
-    assert manifest.exists()
-    assert "ros-$ROS_DISTRO-urg-node" in manifest.read_text(encoding="utf-8")
 
 
 def test_project_up_errors_on_empty_plan(cli_runner, temp_workspace):

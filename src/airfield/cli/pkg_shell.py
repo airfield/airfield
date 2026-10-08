@@ -12,6 +12,7 @@ from airfield.cli.package_exec import (
     gpu_runtime_args,
     in_airfield_container,
     resolve_package_context,
+    shell_wrap_args,
 )
 
 console = Console()
@@ -35,14 +36,16 @@ def run(
     console.print(f"Build successful. Opening shell in [cyan]{image_name}[/cyan]...")
     mount_args = docker_mount_args(pkg_dir, pkg, source_root, target_device)
     runtime_gpu_args = gpu_runtime_args()
+    user_env_args, shell_cmd = shell_wrap_args()
     if is_arm_mac():
         run_cmd = [
             "container", "run", "-it", "--rm",
             *mount_args,
+            *user_env_args,
             "-w", container_workdir(pkg),
             *runtime_gpu_args,
             image_name,
-            "/bin/bash", "-l",
+            *shell_cmd,
         ]
     else:
         run_cmd = [
@@ -50,10 +53,11 @@ def run(
             "--group-add", "0",
             "--ipc=host", "--network=host",
             *mount_args,
+            *user_env_args,
             "-w", container_workdir(pkg),
             *runtime_gpu_args,
             image_name,
-            "/bin/bash", "-l",
+            *shell_cmd,
         ]
     result = subprocess.run(run_cmd)
     if result.returncode != 0:

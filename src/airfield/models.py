@@ -2,7 +2,7 @@ import re
 import yaml
 from pathlib import Path
 from typing import Dict, List, Optional, Union
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr, field_validator
 
 
 # Single source of truth for supported ROS distributions. Adding a distro is
@@ -40,6 +40,14 @@ SUPPORTED_ROS_DISTROS = set(ROS_DISTROS)
 
 
 _DEP_SPEC_PATTERN = re.compile(r"^([A-Za-z0-9_.-]+)\s*(.*)$")
+
+# An `apt:` entry is a package name, optionally pinned (`foo=1.2-3`) or targeted
+# at a suite (`foo/noble-backports`). Shell variables are allowed and expanded at
+# build time: `ros-$ROS_DISTRO-nav2-bringup` is how a manifest stays usable
+# across distros. Spaces are not, which is what keeps a shell command out.
+_APT_VAR = r"\$\{?[A-Za-z_][A-Za-z0-9_]*\}?"
+_APT_NAME = rf"(?:[a-z0-9+.\-]|{_APT_VAR})+"
+_APT_SPEC_PATTERN = re.compile(rf"^{_APT_NAME}(?:=[A-Za-z0-9+.:~\-]+|/[A-Za-z0-9.\-]+)?$")
 
 
 class DependencySpec(BaseModel):
@@ -81,9 +89,70 @@ class Dependency(BaseModel):
     name: str
     version: str = "1.0.0"
     ros_versions: List[str] = Field(default_factory=list)
+    # Requirement specs (e.g. "numpy", "flask>=3"), NOT commands. Every package's
+    # pip entries are collected into a single `pip install` so the resolver sees
+    # them together; separate installs each solve in isolation and silently
+    # overwrite each other's versions (pip exits 0 on that, so the build goes
+    # green with a broken image). Anything pip cannot express as a plain
+    # requirement -- a custom index, a conditional install -- still belongs in
+    # `user`/`system`, at the cost of being outside the shared resolve.
+    pip: List[str] = Field(default_factory=list)
+    # Apt package names, likewise collected across every dependency into a single
+    # `apt-get install`. Two wins over a command per manifest: apt refuses a set
+    # it cannot satisfy instead of resolving a conflict by quietly REMOVING a
+    # package an earlier manifest installed (it exits 0 either way, and the
+    # result passes `apt-get check` because nothing is broken -- something is
+    # just missing), and one index refresh replaces one per dependency.
+    apt: List[str] = Field(default_factory=list)
     system: List[str] = Field(default_factory=list)
     user: List[str] = Field(default_factory=list)
     host_dependencies: List[HostDependency] = Field(default_factory=list)
+    # Set only on a dependency Airfield made up for a name that has no
+    # manifest: the package.xml or airfield.yaml that listed it. What gets
+    # installed was then translated from the name, so a failed install is
+    # explained in those terms instead of leaving apt's bare "Unable to locate
+    # package".
+    inferred_from: Optional[str] = None
+    # ...and how the name was translated: by a rule in rosdep's table
+    # ("rosdep"), as a package released for the ROS distribution ("ros-index"),
+    # or, with neither to go on, from the shape of the name alone ("rule").
+    inferred_via: Optional[str] = None
+
+    @field_validator("apt", mode="after")
+    @classmethod
+    def _validate_apt_specs(cls, specs: List[str]) -> List[str]:
+        cleaned: List[str] = []
+        for raw in specs:
+            spec = str(raw).strip()
+            if not spec:
+                continue
+            if not _APT_SPEC_PATTERN.match(spec):
+                raise ValueError(
+                    f"'apt' entries are package names, not shell commands (got '{spec}'). "
+                    "Use e.g. 'libfoo-dev' or 'ros-$ROS_DISTRO-nav2-bringup'; "
+                    "put real commands under 'system' or 'user'."
+                )
+            cleaned.append(spec)
+        return cleaned
+
+    @field_validator("pip", mode="after")
+    @classmethod
+    def _validate_pip_specs(cls, specs: List[str]) -> List[str]:
+        cleaned: List[str] = []
+        for raw in specs:
+            spec = str(raw).strip()
+            if not spec:
+                continue
+            # The common migration mistake is pasting the old command in here.
+            # Catch it at load time rather than emitting a Dockerfile that tries
+            # to `pip install python3 -m pip install foo`.
+            if re.search(r"(^|\s)(pip|python3?|apt-get|sudo)(\s|$)", spec):
+                raise ValueError(
+                    f"'pip' entries are requirement specs, not shell commands (got '{spec}'). "
+                    "Use e.g. 'numpy' or 'flask>=3'; put real commands under 'user' or 'system'."
+                )
+            cleaned.append(spec)
+        return cleaned
 
     @classmethod
     def load(cls, path: Path) -> "Dependency":
@@ -93,11 +162,24 @@ class Dependency(BaseModel):
 
 class Package(BaseModel):
     name: str
+    # What the image needs beyond the package.xml files under source_path,
+    # which are read on every command. Nothing in package.xml has to be
+    # repeated here. A name needs a manifest only when apt cannot install it
+    # by name (see dependency_resolver).
     dependencies: List[str] = Field(default_factory=list)
     dependency_constraints: Dict[str, str] = Field(default_factory=dict)
+    # package.xml entries to leave out of the image (rosdep's --skip-keys):
+    # for a wrapped upstream package whose manifest names something that
+    # cannot be installed and is not actually needed.
+    skip_dependencies: List[str] = Field(default_factory=list)
     source_path: str = "src"
     ros_distro: Optional[str] = None
     base_image: Optional[str] = None
+    # Whether `docker build` refreshes the base image from its registry
+    # (`--pull`). None = not set here: inherit the project's setting when this
+    # package inherits the project's base_image, else pull. Set false for a
+    # base image that is built locally and exists in no registry.
+    pull_base_image: Optional[bool] = None
     # Extra args appended to the auto `colcon build` run by the container entry
     # wrapper, e.g. "--cmake-args -DCMAKE_BUILD_MODE=Hardware".
     colcon_args: Optional[str] = None
@@ -105,7 +187,11 @@ class Package(BaseModel):
     devices: List[str] = Field(default_factory=list)
     group_add: List[str] = Field(default_factory=list)
     run: Dict[str, str] = Field(default_factory=dict)
-    
+    # Not configuration: remarks from dependency resolution (a package.xml
+    # entry that was ignored, a package.xml that could not be read), kept
+    # until the image build prints them.
+    _resolution_notes: List[str] = PrivateAttr(default_factory=list)
+
     @classmethod
     def load(cls, path: Path) -> "Package":
         with open(path, "r") as f:
@@ -122,6 +208,9 @@ class Package(BaseModel):
 
         data["dependencies"] = cleaned_deps
         data["dependency_constraints"] = constraints
+        data["skip_dependencies"] = [
+            str(s).strip() for s in (data.get("skip_dependencies") or []) if str(s).strip()
+        ]
 
         ros_distro = data.get("ros_distro")
         if isinstance(ros_distro, str):

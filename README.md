@@ -135,9 +135,14 @@ airfield package init --path /path/to/existing_ros_package --ros-distro jazzy
 
 If `package.xml` exists in that path, Airfield adds:
 
-- `airfield.yaml` with inferred `name` and dependency list
-- `ros_distro` to select the ROS workspace base image (`noetic`, `humble`, or `jazzy`)
+- `airfield.yaml` with the inferred `name` and an empty `dependencies:` list
+- `ros_distro` to select the ROS workspace base image (`noetic`, `humble`, `jazzy`, `kilted`, or `rolling`)
 - `AIRFIELD.md` with migration notes
+
+The dependency list is left empty on purpose: the package's dependencies stay
+in `package.xml`, which Airfield reads on every build (see
+[Where dependencies come from](#where-dependencies-come-from)). The command
+prints how each `package.xml` entry will be installed.
 
 It does not rewrite existing ROS source files.
 
@@ -168,6 +173,62 @@ In a standalone package, dependency manifests are resolved from the package root
 - `./dependencies/<target-device>/*.yaml`
 
 Airfield does not copy package source into image layers. It mounts `source_path` into the container at runtime.
+
+#### Building once for several machines
+
+An image holds nothing about who built it or where. The account a command
+runs as is made when the container starts, from the caller's own login name,
+ids and home path, so files written to the mounts are the caller's on any
+machine. And each image is named after its recipe:
+`airfield-pkg-<name>:<fingerprint>`, where the fingerprint covers everything
+that decides what the image contains (the base image's name, every
+dependency, the architecture, GPU or CPU, Airfield's own code). `:latest`
+still names the most recent one.
+
+So machines of the same kind arrive at the same name for the same package,
+and a machine that differs arrives at another and builds its own. To let them
+share, name a repository in the project's `airfield.yaml`:
+
+```yaml
+image_registry: ghcr.io/my-org/my-robot
+```
+
+Then, each time a package's image is needed:
+
+1. if this machine already has the image for this recipe, it is used as it is
+   (no `docker build` at all, which also makes every container start faster);
+2. else, if another machine has pushed that recipe's image, it is pulled;
+3. else it is built here, as before.
+
+One machine uploads what it has built, the others find it there:
+
+```bash
+airfield package build nav_stack --push      # build if needed, then upload
+airfield package build nav_stack --rebuild   # build from scratch, whatever exists
+```
+
+- Every package's image goes to that one repository, as the tag
+  `<name>-<fingerprint>`, so the base image's layers are uploaded once.
+- Log in with `docker login` on each machine. Use a private repository if the
+  base image may not be redistributed.
+- `AIRFIELD_IMAGE_REGISTRY` overrides the project's setting on one machine;
+  `none` switches sharing off there.
+- The fingerprint covers the base image's name, not its contents. A shared
+  image stays in use on a machine whose own copy of the base image differs
+  (Airfield says so when it happens). To move a fleet to a new base image,
+  give it a new tag, or `--rebuild --push` from one machine.
+- Without `image_registry`, step 1 still applies to a package that does not
+  refresh its base image (`pull_base_image: false`): the image is rebuilt only
+  when its recipe or the local base image changes. A package that does
+  refresh its base image builds every time, as before.
+- An update to Airfield gives every image a new tag, because Airfield's own
+  code is part of the image. That code is the last thing put into an image,
+  so the rebuild redoes that one step and keeps every dependency install: it
+  takes seconds. This relies on the earlier build's layers being on the
+  machine. A machine that pulled its image and never built it has none, so
+  let a machine that did build `--push` the new image first.
+- Image reuse and sharing are implemented for Docker. With Apple's
+  `container` engine every command builds, as before.
 
 ### 5. Run a named package command
 
@@ -293,8 +354,96 @@ source_path: src
 - If working on a new package, you can have a local `dependencies/<target_device>/` folder in the project or standalone package. Airfield will build from it but prints a warning telling you to upstream the manifests with `airfield package dependencies upstream .`.
 - `source_path` is relative to the package directory
 - `ros_distro` selects the ROS base image and workspace overlay
-- `base_image` optionally overrides the generated image's `FROM` line; when omitted, ROS packages use the selected ROS base image and non-ROS packages use `ubuntu:24.04`
+- `base_image` optionally overrides the generated image's `FROM` line; when omitted, ROS packages use the selected ROS base image and non-ROS packages use `ubuntu:24.04`. The project `airfield.yaml` can also set `base_image`, which every package without its own inherits.
+- `pull_base_image` (default `true`) controls whether each build refreshes the base image from its registry (`docker build --pull`). Set `pull_base_image: false` when the base image is built locally and exists in no registry (a custom board image, for example), where the pull would fail the build. Set it in the project `airfield.yaml` next to `base_image`: packages that inherit the project's base image inherit this too, while a package that names its own `base_image` keeps pulling unless it sets `pull_base_image: false` itself. Because it lives in `airfield.yaml`, every machine that checks out the project gets it with no per-machine setup. Without `--pull`, Docker still downloads a base image that is missing locally; it just never refreshes one it already has.
 - For wrapped ROS packages, `source_path` is usually `.`
+
+### Where dependencies come from
+
+A ROS package already lists its dependencies in `package.xml`. Airfield reads
+every `package.xml` under `source_path` each time it builds or runs the
+package, so that file is the only list to maintain: add
+`<depend>nav2_msgs</depend>` and the next build installs it. Nothing has to be
+repeated in `airfield.yaml`.
+
+`dependencies:` in `airfield.yaml` is for what `package.xml` does not say: a
+tool that a plan runs in this container, a driver chosen at launch time, a
+library an upstream `package.xml` leaves out. A package with no `package.xml`
+(a containerized tool, say) lists everything there.
+
+Each name is resolved in this order, first match wins:
+
+1. A ROS package in the package's own source tree: nothing to install.
+2. A dependency manifest named `<name>.yaml`, in the project's `dependencies/`
+   or the shared packages repository. This is the recipe for installing it,
+   and the way to override steps 4 and 5.
+3. A peer package in the project, matched by its folder name or by a ROS
+   package inside it. Its source is mounted and built alongside.
+4. rosdep's lookup table: what the name is called on the image's Ubuntu
+   release. `nav2_msgs` becomes `ros-jazzy-nav2-msgs`, `eigen` becomes
+   `libeigen3-dev`, `cmake` stays `cmake`.
+5. For a name the table does not have, the apt package the name
+   conventionally maps to: `ros-<distro>-<name>` for a ROS package name, or
+   the name itself for a Debian-style name such as `python3-serial`.
+
+Steps 4 and 5 hold for names from either file.
+
+So a manifest is needed only for what rosdep cannot say:
+
+- anything installed by a command (a source build pinned to a commit, a
+  vendor `.deb`), or a pip package rosdep has no key for;
+- an install that differs per machine (a GPU and a CPU variant, separate
+  x86_64 and arm64 downloads);
+- a name rosdep does not know (`opencv2` standing for `libopencv-dev`), or a
+  deliberate choice other than rosdep's.
+
+A manifest that only says "install `ros-$ROS_DISTRO-<name>`" repeats step 4
+and is not needed. Existing ones do no harm.
+
+#### The lookup table
+
+Step 4 reads rosdep's own data: its rule files and the list of packages
+released for the ROS distribution, from
+[ros/rosdistro](https://github.com/ros/rosdistro). rosdep itself is not
+installed or run, in the image or on the host. Airfield reads the files on the
+host and keeps the result in `~/.cache/airfield/rosdep/`, one small file per
+ROS distribution.
+
+- The table is fetched the first time a name needs it (about 1 MB, once).
+  After that a build needs no network to translate a name.
+- It is never refreshed by itself, so an image does not change from one day to
+  the next. `airfield package dependencies pull` brings it up to date, along
+  with the shared manifests.
+- If it cannot be fetched, the build goes on with step 5 alone and says so.
+- `AIRFIELD_ROSDISTRO_URL` points Airfield at a mirror or a local copy
+  (`file:///...`) with the same layout. `AIRFIELD_ROSDEP_TABLE=off` switches
+  the table off.
+
+What to expect at the edges:
+
+- Every build lists the names it installed without a manifest. The ones
+  rosdep's table translated are settled. The ones that fell through to step 5
+  are printed on their own line, "installed from apt by name": that is where
+  a misspelled name shows up. If apt has no such package, the build stops and
+  says which file listed the name.
+- Steps 4 and 5 describe an image built for a ROS distribution, so they apply
+  only to packages that set `ros_distro`. In a package without it every name
+  needs a manifest, and a miss is an error. So is a name that is in no table
+  and fits neither naming pattern.
+- `skip_dependencies:` in `airfield.yaml` lists `package.xml` entries to leave
+  out of the image (the equivalent of rosdep's `--skip-keys`), for an upstream
+  manifest that names something the image does not need.
+- An entry that cannot be a package name at all (`OpenCV 3.4.12`) is ignored
+  with a warning.
+- Build and run tags are read (`depend`, `build_depend`, `exec_depend`, and
+  the export and buildtool variants). `test_depend` and `doc_depend` are not.
+  `condition="..."` attributes are honored.
+- A package without `ros_distro` has no ROS in its image, so its `package.xml`
+  is not read.
+
+`airfield status`, run inside a package, lists every dependency, which file
+asked for it, and how it resolved. It also names the `airfield.yaml` entries
+that only repeat `package.xml` and can be deleted.
 
 Dependency policy:
 
@@ -382,10 +531,25 @@ Generated images are intentionally minimal: the base image plus `python3-pip`,
 GUI libraries, extra shells — must be declared as dependencies so each package
 only pays for what it uses.
 
+The base image has to be Debian or Ubuntu based, because the build installs
+with apt. The airfield CLI needs Python 3.10 or newer; on a base image with an
+older Python (ROS Noetic and many vendor board images are Ubuntu 20.04) the
+image is built without the `airfield` command inside it, and the build says
+so. Nothing else about the image, or about how Airfield runs it, changes.
+
+A container starts as root in `/opt/airfield-init.sh`, which creates the
+caller's account and runs the command as that user. Two consequences:
+`docker exec` into a running container lands you as root (use
+`docker exec -u $(id -u):$(id -g) ...` to be yourself), and an image run by
+hand without the `AIRFIELD_UID` / `AIRFIELD_GID` / `AIRFIELD_USER` /
+`AIRFIELD_HOME` variables runs as root.
+
 Environment variables that change build/run behavior (each build prints the
 effective settings in an `[airfield] build settings:` line):
 
-- `AIRFIELD_NO_PULL=1` — don't `--pull` the base image; required when `base_image` is a locally-built image that exists in no registry
+- `AIRFIELD_NO_PULL` — one-off override of `pull_base_image` for the current command: `1`/`true`/`yes` skips the base-image pull, `0`/`false`/`no` forces it. For a project whose base image is local-only, prefer `pull_base_image: false` in its `airfield.yaml`, which needs no per-machine setup
+- `AIRFIELD_IMAGE_REGISTRY` — repository that images are shared through, overriding the project's `image_registry:` on this machine; `none` switches sharing off
+- `AIRFIELD_ROSDISTRO_URL` / `AIRFIELD_ROSDEP_TABLE=off` — where rosdep's lookup table is fetched from, and a switch to do without it (see "The lookup table")
 - `AIRFIELD_PACKAGES_REPO` — git URL of the shared dependency-manifest repository (default `https://github.com/airfield/packages.git`); set for forks, mirrors, or air-gapped sites
 - `AIRFIELD_REPO` — GitHub `owner/name` slug used for update checks (default `airfield/airfield`)
 - `AIRFIELD_FORCE_DOCKER_CACHE_MOUNTS=1` / `AIRFIELD_DISABLE_DOCKER_CACHE_MOUNTS=1` — override BuildKit cache-mount detection
