@@ -14,7 +14,7 @@ from pydantic import TypeAdapter, ValidationError
 from airfield.models import Dependency, Package, ROS_DISTROS
 from airfield.build_progress import run_build_with_progress, with_plain_progress
 from airfield.docker_cache import get_cache_optimization_comment
-from airfield.config import is_arm_mac
+from airfield.config import GUIDE_DIR, is_arm_mac
 
 
 DOCKER_PLATFORMS = {
@@ -456,6 +456,10 @@ packages = []
             if not path.is_file() or "__pycache__" in relative.parts:
                 continue
             if path.suffix in {".pyc", ".pyo"} or path.name.startswith(".") or path.name.endswith("~"):
+                continue
+            # The guide is documentation: no container reads it, and editing
+            # it must not give every image a new tag.
+            if relative.parts[0] == GUIDE_DIR:
                 continue
             files.append((f"src/airfield/{relative.as_posix()}", path.read_bytes()))
         files.append(("project/pyproject.toml", self._airfield_pyproject().encode("utf-8")))

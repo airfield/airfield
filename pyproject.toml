@@ -35,7 +35,7 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-airfield = ["templates/docker/*.j2", "templates/tmux/*.j2"]
+airfield = ["templates/docker/*.j2", "templates/tmux/*.j2", "guide/*.md"]
 
 [tool.setuptools.dynamic]
 version = {attr = "airfield.__version__"}

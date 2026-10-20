@@ -2,7 +2,7 @@ import typer
 from rich.console import Console
 from typer.core import TyperGroup
 
-from airfield.cli import build, dependencies_upstream, doctor, docker_cache_cmd, down, liftoff, pkg_cmd, pkg_deinit, pkg_init, pkg_run, pkg_shell, proj_deinit, proj_init, run, status, subprojects, up
+from airfield.cli import build, dependencies_upstream, doctor, docker_cache_cmd, down, guide, liftoff, pkg_cmd, pkg_deinit, pkg_init, pkg_run, pkg_shell, proj_deinit, proj_init, run, status, subprojects, up
 from airfield.cli import tools_system
 from airfield.config import ensure_airfield_runtime_dirs, find_package_root, find_project_root
 
@@ -84,6 +84,7 @@ docker_app.command(name="cache")(docker_cache_cmd.run)
 
 app.command(name="status")(status.run)
 app.command(name="doctor")(doctor.run)
+app.command(name="guide")(guide.run)
 
 
 @pkg_app.callback(invoke_without_command=True)
@@ -137,7 +138,8 @@ def main(ctx: typer.Context):
     """Airfield CLI"""
     ensure_airfield_runtime_dirs()
     message = _context_message()
-    if message is not None:
+    # `airfield guide` prints the guide and nothing else, so it can be saved.
+    if message is not None and ctx.invoked_subcommand != "guide":
         console.print(f"[dim]{message}[/dim]")
 
     if ctx.invoked_subcommand is None:

@@ -2,6 +2,10 @@
 
 Full Documentation: [airfield.io](https://airfield.io)
 
+Using a coding agent? After installing, have it run `airfield guide`: it prints
+the Quick Start guide for the installed version, word for word, and ends with
+the other pages it prints (`airfield guide reference`, `runtime`, `dependencies`).
+
 Airfield is a package-centric robotics framework for structuring projects, declaring dependencies, and running reproducible package containers.
 
 ## Prerequisites
@@ -47,6 +51,7 @@ Airfield uses namespaced commands:
 - `airfield tools ...` for maintenance tasks
 - `airfield status` for context and runtime status
 - `airfield doctor` for system dependency checks
+- `airfield guide [topic]` for the Quick Start and other airfield.io pages as plain text (what to give a coding agent)
 
 Common lifecycle commands:
 
@@ -99,9 +104,12 @@ my_robot/
 		arm64/
 	plans/
 		example.yaml
+	AGENTS.md
 ```
 
 `airfield.yaml` is the project marker used by all `package` and `project` commands.
+`AGENTS.md` tells coding agents to read `airfield guide`; if the project already
+has one, a short section is added at its end and nothing else in it changes.
 
 ### 2. Initialize a new Airfield package
 
@@ -583,6 +591,14 @@ Alternatively, if you are using `uv`:
 ```bash
 uv run --no-env-file --extra test pytest --cov=src/airfield
 ```
+
+### The guide pages
+
+`src/airfield/guide/` holds the pages `airfield guide` prints: plain-text
+copies of four airfield.io pages, which are written in the documentation
+repository. Don't edit the copies. After a docs edit to one of those pages, run
+`python3 scripts/copy_guide.py <path to the documentation repository>`,
+check `git diff src/airfield/guide`, and commit the result.
 
 ### Release Tagging and Hooks
 

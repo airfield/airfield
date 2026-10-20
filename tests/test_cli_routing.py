@@ -27,6 +27,7 @@ from airfield.main import app
         ["docker", "cache"],
         ["status"],
         ["doctor"],
+        ["guide"],
     ],
 )
 def test_documented_commands_have_help(cli_runner, command):
@@ -40,7 +41,7 @@ def test_command_surface(cli_runner):
     result = cli_runner.invoke(app, ["--help"])
 
     assert result.exit_code == 0
-    for command in ["package", "project", "system", "tools", "docker", "status", "doctor"]:
+    for command in ["package", "project", "system", "tools", "docker", "status", "doctor", "guide"]:
         assert command in result.output
 
     for legacy_command in ["create", "build", "up", "run", "liftoff"]:
