@@ -9,6 +9,9 @@ import yaml
 
 AIRFIELD_CONFIG = "airfield.yaml"
 AIRFIELD_LOCAL_CONFIG = ".air"
+# Plain-text copies of airfield.io pages, shipped inside the package for
+# `airfield guide`. scripts/copy_guide.py makes them; edit the pages instead.
+GUIDE_DIR = "guide"
 # Overridable so forks, mirrors, and air-gapped sites can point at their own
 # packages repository.
 PACKAGES_GITHUB_REPO = os.environ.get(

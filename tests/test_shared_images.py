@@ -266,10 +266,12 @@ def test_machine_settings_a_recipe_never_reads_do_not_split_the_fleet(monkeypatc
 
 def test_only_airfields_own_package_goes_into_the_image():
     """Not the checkout around it: editing the README, the docs or a test, or
-    leaving an editor's swap file behind, must not give every image a new tag."""
+    leaving an editor's swap file behind, must not give every image a new tag.
+    Nor the guide, which is docs even though it ships inside the package."""
     names = [name for name, _ in _ros_builder()._airfield_source_files()]
 
     assert "project/pyproject.toml" in names and "src/airfield/main.py" in names
+    assert not any(name.startswith("src/airfield/guide/") for name in names)
     assert all(name == "project/pyproject.toml" or name.startswith("src/airfield/") for name in names)
     assert not any("__pycache__" in name or name.endswith(".pyc") for name in names)
     assert names == sorted(names[:-1]) + ["project/pyproject.toml"], "a fixed order, so the fingerprint is stable"
