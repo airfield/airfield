@@ -104,9 +104,12 @@ my_robot/
 		arm64/
 	plans/
 		example.yaml
+	AGENTS.md
 ```
 
 `airfield.yaml` is the project marker used by all `package` and `project` commands.
+`AGENTS.md` tells coding agents to read `airfield guide`; if the project already
+has one, a short section is added at its end and nothing else in it changes.
 
 ### 2. Initialize a new Airfield package
 
