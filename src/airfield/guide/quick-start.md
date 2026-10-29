@@ -8,16 +8,17 @@ The full loop in one sitting: install, project, package, image, run, plan,
 and converting an existing workspace. The other tutorials at
 https://airfield.io cover each piece in depth.
 
-> **Using a coding agent?** Start it on this guide: it covers installing
-> Airfield, converting a project, and working in one. Once Airfield is
-> installed, `airfield guide` prints it for the installed version, and
-> `airfield guide reference`, `airfield guide runtime` and
-> `airfield guide dependencies` print the CLI Reference, Runtime & Environment
-> and Managing Dependencies pages the same way. `airfield project init` leaves
-> an `AGENTS.md` that tells agents to run `airfield guide`. Before installing,
-> paste the link (`https://airfield.io/docs/quick-start/`) or upload a copy of
-> the page. Some agents read a web page only as a summary, which drops exact
-> commands; `airfield guide` gives them the full text.
+> **Using a coding agent?** Paste this into it before giving it a task:
+>
+> ```text
+> Install Airfield with `pipx install git+https://github.com/airfield/airfield.git`, then run `airfield guide` and read all of it.
+> ```
+>
+> This works better than the page's link, which many agents read only as a
+> summary that drops exact commands. `airfield guide` prints this whole page
+> for the installed version, then lists the other pages it can print. In later
+> sessions, the `AGENTS.md` that `airfield project init` writes sends the agent
+> to `airfield guide` on its own.
 
 ## Rules of thumb
 
