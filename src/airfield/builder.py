@@ -245,12 +245,13 @@ AIRFIELD_PROJECT_DIR = "/opt/airfield/project"
 AIRFIELD_SRC_DIR = "/opt/airfield/src"
 IMAGE_DIST_VERSION = "0+image"
 
-# The oldest Python the CLI runs on. A base image may well ship an older one
-# (ROS Noetic and many vendor board images are Ubuntu 20.04, Python 3.8). The
-# image is no less useful for it: nothing Airfield does to a container needs
-# the CLI inside it. So on such a base the `airfield` command is left out and
-# the build goes on, where it used to stop at pip's "requires a different
-# Python" and leave that base without any image at all.
+# The oldest Python an image gets the `airfield` command on. The CLI itself
+# runs on 3.8, but Ubuntu 20.04 bases (ROS Noetic, many vendor board images)
+# carry a PyYAML that apt installed, older than the CLI needs and that pip
+# cannot replace, so the install fails there. The image is no less useful for
+# it: nothing Airfield does to a container needs the CLI inside it. So on such
+# a base the `airfield` command is left out and the build goes on. The number
+# is part of every image's recipe: changing it rebuilds every image.
 AIRFIELD_MIN_PYTHON = (3, 10)
 
 # Baked into every image at /opt/airfield-pip-check.sh and run twice during the
@@ -386,7 +387,8 @@ class Builder:
         """Runtime requirements of the installed airfield distribution.
 
         Read from installed metadata so the synthesized project matches whatever
-        this CLI was installed with; extras (test-only deps) are filtered out.
+        this CLI was installed with; extras (test-only deps) are filtered out,
+        and each is spelled one way (see _requirement_text).
         """
         fallback = [
             "typer>=0.9.0",
@@ -400,8 +402,25 @@ class Builder:
             reqs = importlib_metadata.requires("airfield") or []
         except Exception:
             return fallback
-        runtime = [r for r in reqs if "extra ==" not in r]
+        runtime = [self._requirement_text(r) for r in reqs if "extra ==" not in r]
         return runtime or fallback
+
+    @staticmethod
+    def _requirement_text(requirement: str) -> str:
+        """One spelling of a requirement read from installed metadata.
+
+        Install tools write the same requirement differently: the setuptools
+        that Python 3.8 gets writes "typer >=0.9.0", newer ones "typer>=0.9.0".
+        The text goes into the image's recipe, so without one spelling the same
+        Airfield code would build and tag every image again depending on how
+        it was installed. A URL requirement is kept as written: there, the
+        spaces matter.
+        """
+        if "@" in requirement:
+            return requirement
+        spec, has_marker, marker = requirement.partition(";")
+        spec = spec.replace(" ", "")
+        return f"{spec}; {marker.strip()}" if has_marker else spec
 
     def _airfield_pyproject(self) -> str:
         """The project pip installs for the running CLI: what it requires and

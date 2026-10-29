@@ -1,5 +1,5 @@
 import re
-from importlib import resources
+from pathlib import Path
 
 import typer
 
@@ -16,7 +16,7 @@ TOPICS = {
 
 
 def text(topic: str) -> str:
-    return resources.files("airfield").joinpath(GUIDE_DIR).joinpath(f"{topic}.md").read_text(encoding="utf-8")
+    return (Path(__file__).resolve().parent.parent / GUIDE_DIR / f"{topic}.md").read_text(encoding="utf-8")
 
 
 def page(topic: str = "quick-start") -> str:

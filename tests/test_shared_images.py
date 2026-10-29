@@ -359,11 +359,12 @@ def test_the_project_installed_early_carries_no_code():
 
 @pytest.mark.parametrize("cache_mounts", [True, False])
 def test_a_base_image_with_an_older_python_still_gets_its_image(cache_mounts):
-    """The CLI needs Python 3.10. ROS Noetic and many board images are Ubuntu
-    20.04 with 3.8, and pip refuses to install the CLI there. That used to
-    fail the whole build, leaving such a base with no image at all, over a
-    command nothing in a container depends on. Now it is left out, with a
-    line in the build output, and only on such a base."""
+    """An image gets the CLI only on Python 3.10 or newer. ROS Noetic and many
+    board images are Ubuntu 20.04 with 3.8, whose apt-installed PyYAML pip
+    cannot replace, so installing the CLI fails there. That used to fail the
+    whole build, leaving such a base with no image at all, over a command
+    nothing in a container depends on. Now it is left out, with a line in the
+    build output, and only on such a base."""
     steps = _recipe_steps(_ros_builder().generate_dockerfile(cache_mounts_enabled=cache_mounts))
     (step,) = [step for step in steps if "/opt/airfield/project ||" in step]
 
@@ -380,11 +381,34 @@ def test_a_requirement_with_a_marker_stays_valid_toml(monkeypatch):
     )
     try:
         import tomllib
-    except ModuleNotFoundError:  # Python 3.10
+    except ModuleNotFoundError:  # Python 3.10 and older
         import tomli as tomllib
     parsed = tomllib.loads(_ros_builder()._airfield_pyproject())
 
     assert parsed["project"]["dependencies"] == ["typer>=0.9.0", 'tomli>=2; python_version < "3.11"']
+
+
+def test_a_requirement_is_spelled_one_way_however_airfield_was_installed(monkeypatch):
+    """The setuptools that Python 3.8 gets writes "typer >=0.9.0" into the
+    installed metadata, newer ones "typer>=0.9.0". Both must give the same
+    recipe, or the same Airfield would build and tag every image twice."""
+    older = ["typer >=0.9.0", "rich[jupyter] >=13.0.0", 'tomli >=2 ; python_version < "3.11"',
+             "pytest >=7.0.0 ; extra == 'test'"]
+    newer = ["typer>=0.9.0", "rich[jupyter]>=13.0.0", 'tomli>=2; python_version < "3.11"',
+             'pytest>=7.0.0; extra == "test"']
+    spelled = []
+    for written in (older, newer):
+        monkeypatch.setattr(builder_module.importlib_metadata, "requires", lambda name, written=written: written)
+        spelled.append(_ros_builder()._airfield_runtime_requirements())
+
+    assert spelled[0] == spelled[1] == ["typer>=0.9.0", "rich[jupyter]>=13.0.0", 'tomli>=2; python_version < "3.11"']
+
+
+def test_a_url_requirement_is_kept_as_written():
+    """PEP 508 needs the space between a URL and its marker."""
+    requirement = 'foo @ https://example.com/foo-1.0.tar.gz ; python_version < "3.11"'
+
+    assert Builder._requirement_text(requirement) == requirement
 
 
 # --- reuse, fetch or build ---------------------------------------------------------
