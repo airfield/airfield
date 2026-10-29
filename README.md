@@ -11,6 +11,7 @@ Airfield is a package-centric robotics framework for structuring projects, decla
 ## Prerequisites
 
 - Linux, or an Apple Silicon Mac (uses Apple's `container` tool). Native Windows is not supported.
+- Python 3.8 or newer
 - [Docker](https://docs.docker.com/engine/install/) with daemon access for your user (`docker info` should work without sudo)
 - `git`
 - `tmux` and [`tmuxinator`](https://github.com/tmuxinator/tmuxinator) — only needed for `airfield project up` plan launches (`apt-get install tmux tmuxinator`)
@@ -540,10 +541,11 @@ GUI libraries, extra shells — must be declared as dependencies so each package
 only pays for what it uses.
 
 The base image has to be Debian or Ubuntu based, because the build installs
-with apt. The airfield CLI needs Python 3.10 or newer; on a base image with an
-older Python (ROS Noetic and many vendor board images are Ubuntu 20.04) the
-image is built without the `airfield` command inside it, and the build says
-so. Nothing else about the image, or about how Airfield runs it, changes.
+with apt. The airfield CLI runs on Python 3.8 or newer, but an image gets the
+`airfield` command only when its own Python is 3.10 or newer; on an older base
+(ROS Noetic and many vendor board images are Ubuntu 20.04) the image is built
+without that command, and the build says so. Nothing else about the image, or
+about how Airfield runs it, changes.
 
 A container starts as root in `/opt/airfield-init.sh`, which creates the
 caller's account and runs the command as that user. Two consequences:

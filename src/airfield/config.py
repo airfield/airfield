@@ -2,7 +2,7 @@ import os
 import platform
 import subprocess
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 import typer
 import yaml
@@ -231,9 +231,9 @@ def dependencies_dir(root: Path, target_device: str) -> Path:
     return packages_repo_root() / target_device
 
 
-def dependency_search_paths(root: Path, target_device: str) -> list[Path]:
+def dependency_search_paths(root: Path, target_device: str) -> List[Path]:
     """Return an ordered list of paths to search for dependency manifests."""
-    paths: list[Path] = []
+    paths: List[Path] = []
 
     # 1. Local project/package specific target
     local_target = root / "dependencies" / target_device

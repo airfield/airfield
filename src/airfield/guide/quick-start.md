@@ -37,7 +37,7 @@ https://airfield.io cover each piece in depth.
 
 ## 1. Install
 
-Airfield needs Python 3.10 or newer, git, and Docker (or a compatible
+Airfield needs Python 3.8 or newer, git, and Docker (or a compatible
 engine). tmux and tmuxinator are needed only to launch plans with
 `project up`.
 
