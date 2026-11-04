@@ -1,9 +1,7 @@
 # Airfield overview
 
-> For visual diagrams of the command tree, namespace hierarchy, file
-> structure, and build/launch flow, see
-> [`airfield-architecture-diagrams.md`](airfield-architecture-diagrams.md) and
-> [`diagrams/README.md`](diagrams/README.md) in this directory.
+> For diagrams of the command tree, file structure, and build/launch flow,
+> see the [Overview](https://airfield.io/docs/overview/) on airfield.io.
 
 ## Introduction
 
