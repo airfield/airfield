@@ -1,4 +1,5 @@
 import pytest
+import typer
 from pathlib import Path
 from airfield.main import app
 
@@ -35,6 +36,18 @@ def test_documented_commands_have_help(cli_runner, command):
     result = cli_runner.invoke(app, [*command, "--help"])
 
     assert result.exit_code == 0
+
+def test_every_command_has_a_description():
+    """`airfield <group> --help` lists each command beside the first line of its
+    docstring, so a command without one shows up with a blank description."""
+    def walk(command, path):
+        yield path, command
+        for name, sub in getattr(command, "commands", {}).items():
+            yield from walk(sub, f"{path} {name}")
+
+    blank = [path for path, command in walk(typer.main.get_command(app), "airfield") if not (command.help or "").strip()]
+
+    assert blank == []
 
 def test_command_surface(cli_runner):
     """Test documented command namespaces are registered and legacy top-level commands are absent."""

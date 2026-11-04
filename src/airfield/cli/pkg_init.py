@@ -6,8 +6,7 @@ import yaml
 from rich.console import Console
 
 from airfield.config import AIRFIELD_CONFIG, dependency_search_paths, find_project_root, is_arm64, packages_dir
-from airfield.dependency_resolver import INFERRED, VIA_RULE, resolve_dependencies
-from airfield.models import Package, SUPPORTED_ROS_DISTROS
+from airfield.ros_distros import SUPPORTED_ROS_DISTROS
 from airfield.docker_cache import generate_dockerignore
 from airfield.package_xml import read_package_xml
 
@@ -118,6 +117,9 @@ def _init_new_package(name: str, force: bool, ros_distro: str) -> None:
 
 
 def _wrap_existing_ros_package(path: Path, force: bool, ros_distro: str) -> None:
+    from airfield.dependency_resolver import INFERRED, VIA_RULE, resolve_dependencies
+    from airfield.models import Package
+
     pkg_dir = path.resolve()
     package_xml = pkg_dir / "package.xml"
     if not package_xml.exists():

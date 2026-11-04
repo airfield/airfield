@@ -3,8 +3,6 @@ import os
 import time
 import shutil
 import subprocess
-import urllib.request
-import urllib.error
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -149,6 +147,9 @@ def check_for_update(force: bool = False, timeout: int = 5) -> Optional[dict]:
 
     Cached results are used if present and fresher than 24 hours unless `force`.
     """
+    import urllib.error
+    import urllib.request
+
     import re
     from functools import cmp_to_key
 
@@ -348,6 +349,8 @@ def install_completion(shell_name: str = typer.Argument(...)):
 
 def setup():
     """Set up the local system for Airfield (installs container backend if needed)."""
+    import urllib.request
+
     if is_arm_mac():
         console.print("[dim]Checking Apple container tool installation...[/dim]")
         container_path = shutil.which("container")

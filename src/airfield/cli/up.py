@@ -3,28 +3,28 @@ from pathlib import Path
 from typing import Optional
 
 import typer
-from jinja2 import Environment, PackageLoader, select_autoescape
 
-from airfield.config import plans_dir, require_project_root
-from airfield.models import Plan
+from airfield.config import complete_plan_name, plan_names, plans_dir, require_project_root
 
 
 def run(
-    plan_name: Optional[str] = typer.Argument(None, help="Name of the plan to compile/launch"),
+    plan_name: Optional[str] = typer.Argument(
+        None, help="Name of the plan to compile/launch", autocompletion=complete_plan_name
+    ),
     output: Path = typer.Option(None, "--output", help="Path to write generated tmuxinator YAML"),
     launch: bool = typer.Option(True, "--launch/--no-launch", help="Launch tmuxinator after generation"),
     inspect: bool = typer.Option(False, "--inspect", help="Print generated tmuxinator config to stdout without launching"),
 ):
     """Generate tmuxinator config for a plan and optionally launch it."""
+    from jinja2 import Environment, PackageLoader, select_autoescape
+
+    from airfield.models import Plan
+
     root = require_project_root()
     p_dir = plans_dir(root)
 
     if not plan_name:
-        if p_dir.exists():
-            plans = sorted([p.stem for p in p_dir.glob("*.yaml")])
-        else:
-            plans = []
-
+        plans = plan_names(root)
         if plans:
             print("Available plans:")
             for plan in plans:

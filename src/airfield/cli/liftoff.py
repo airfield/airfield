@@ -1,9 +1,17 @@
 import typer
 import subprocess
-from airfield.models import Plan
-from airfield.config import plans_dir, require_project_root
+from airfield.config import complete_plan_name, plans_dir, require_project_root
 
-def run(plan_name: str):
+def run(
+    plan_name: str = typer.Argument(..., help="Name of the plan to run", autocompletion=complete_plan_name),
+):
+    """Run each package in a plan's packages: list, one at a time.
+
+    No tmux: each package's default run command blocks until it exits. To
+    start a plan's windows: side by side, use `airfield project up`.
+    """
+    from airfield.models import Plan
+
     print(f"Loading plan {plan_name}...")
 
     root = require_project_root()

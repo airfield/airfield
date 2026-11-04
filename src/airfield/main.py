@@ -30,6 +30,10 @@ class PrefixGroup(TyperGroup):
         if len(unique) == 1:
             return next(iter(unique.values()))[1]
         if len(unique) > 1:
+            if ctx.resilient_parsing:
+                # A <TAB> (Click parses without acting then): printing and
+                # exiting here would put a traceback over the prompt.
+                return None
             choices = sorted({name for name, _ in matches})
             console.print(f"[red]Error:[/red] Command '{cmd_name}' is ambiguous. Matches: {', '.join(choices)}")
             raise typer.Exit(1)

@@ -7,7 +7,7 @@ import yaml
 from rich.console import Console
 
 from airfield.config import AIRFIELD_CONFIG
-from airfield.models import SUPPORTED_ROS_DISTROS
+from airfield.ros_distros import SUPPORTED_ROS_DISTROS
 from airfield.docker_cache import generate_dockerignore
 
 console = Console()

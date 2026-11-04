@@ -15,18 +15,6 @@ from airfield.config import (
     is_arm_mac,
     is_arm64,
 )
-from airfield.dependency_resolver import (
-    INFERRED,
-    INVALID,
-    PEER,
-    RECIPE,
-    SKIPPED,
-    VIA_ROS_INDEX,
-    VIA_ROSDEP,
-    WORKSPACE,
-    resolve_dependencies,
-)
-from airfield.models import Package
 from airfield.package_xml import PACKAGE_XML
 
 console = Console()
@@ -154,6 +142,19 @@ def _print_resolved_dependencies(
     in the source tree) and resolve in several ways, so this is where to look
     when the image has something unexpected or lacks something expected.
     """
+    from airfield.dependency_resolver import (
+        INFERRED,
+        INVALID,
+        PEER,
+        RECIPE,
+        SKIPPED,
+        VIA_ROS_INDEX,
+        VIA_ROSDEP,
+        WORKSPACE,
+        resolve_dependencies,
+    )
+    from airfield.models import Package
+
     try:
         pkg = Package.load(manifest_path)
         plan = resolve_dependencies(pkg, package_root, source_root, project_root, search_paths)

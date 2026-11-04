@@ -3,10 +3,11 @@ import json
 from pathlib import Path
 
 from airfield.config import AIRFIELD_CONFIG, is_arm_mac
-from airfield.models import Package
 
 
 def cleanup_package_container_artifacts(package_root: Path) -> None:
+    from airfield.models import Package
+
     manifest = package_root / AIRFIELD_CONFIG
 
     if not manifest.exists():

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import posixpath
 import pwd
@@ -11,17 +13,19 @@ import time
 import uuid
 from pathlib import Path
 from string import Template
-from typing import List, Optional, Tuple
+from typing import TYPE_CHECKING, List, Optional, Tuple
 
 import typer
 import yaml
-from pydantic import TypeAdapter, ValidationError
 
-from airfield.builder import Builder
 from airfield.config import AIRFIELD_CONFIG, AIRFIELD_LOCAL_CONFIG, _load_yaml, dependencies_dir, dependency_search_paths, find_project_root, packages_dir, require_package_root, is_arm_mac
-from airfield.dependency_resolver import MISSING, resolve_dependencies
-from airfield.host_check import detect_host_facts, evaluate_host_dependencies
-from airfield.models import Dependency, Package, SUPPORTED_ROS_DISTROS
+from airfield.ros_distros import SUPPORTED_ROS_DISTROS
+
+# pydantic, the builder and the dependency resolver are imported inside the
+# functions that use them, so `airfield` starts, and answers <TAB>, without them.
+if TYPE_CHECKING:
+    from airfield.builder import Builder
+    from airfield.models import Dependency, Package
 
 
 def run_container_foreground(run_cmd: List[str]) -> int:
@@ -270,6 +274,9 @@ def resolve_package_context(
     package_name: Optional[str],
     target_device: str = "x86_64",
 ) -> Tuple[Path, Package, List[Dependency], Path]:
+    from airfield.dependency_resolver import MISSING, resolve_dependencies
+    from airfield.models import Package
+
     root = find_project_root()
 
     if root is not None:
@@ -357,6 +364,8 @@ def _apply_project_base_image_defaults(pkg: Package, pkg_dir: Path) -> None:
     otherwise a project whose own base is local-only would silently stop
     refreshing that package's registry image.
     """
+    from pydantic import TypeAdapter, ValidationError
+
     if pkg.base_image:
         return
     root = find_project_root(pkg_dir)
@@ -529,6 +538,8 @@ def build_package_image(
     build is fetched; else it is built here. ``rebuild`` skips the first two
     and builds from scratch. ``push`` uploads the result for other machines.
     """
+    from airfield.builder import Builder
+
     for note in pkg._resolution_notes:
         print(f"[WARN] {note}")
     _apply_locked_dependency_versions(pkg)
@@ -614,6 +625,8 @@ def _apply_locked_dependency_versions(pkg: Package) -> None:
 
 
 def _resolve_torch_install_target() -> str:
+    from airfield.host_check import detect_host_facts
+
     explicit = os.environ.get("AIRFIELD_TORCH_INSTALL_TARGET") or os.environ.get("TORCH_INSTALL_TARGET")
     if explicit:
         target = explicit.strip().lower()
@@ -640,6 +653,8 @@ def _print_host_issues(issues) -> None:
 
 
 def _validate_and_configure_host_dependencies(pkg: Package, deps: List[Dependency]) -> None:
+    from airfield.host_check import evaluate_host_dependencies
+
     install_target = _resolve_torch_install_target()
     facts, issues = evaluate_host_dependencies(deps, install_target=install_target)
 
@@ -842,6 +857,8 @@ def in_airfield_container() -> bool:
 
 def docker_mount_args(pkg_dir: Path, pkg: Package, source_root: Path, target_device: str) -> List[str]:
     """Build docker -v mount arguments from package source and config mounts."""
+    from airfield.dependency_resolver import resolve_dependencies
+
     mount_args: List[str] = []
 
     container_src = container_source_mount_path(pkg.name)
