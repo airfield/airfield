@@ -383,7 +383,7 @@ def test_entry_that_cannot_be_a_package_name_is_ignored_with_a_warning(project, 
     assert [e.name for e in _plan(project).of_kind(INVALID)] == ["OpenCV 3.4.12"]
 
     mocker.patch("airfield.cli.package_exec._validate_and_configure_host_dependencies")
-    mocker.patch("airfield.cli.package_exec.Builder.build", return_value=(True, "image"))
+    mocker.patch("airfield.builder.Builder.build", return_value=(True, "image"))
     build_package_image(pkg_dir, pkg, deps, target_device="x86_64")
 
     out = capsys.readouterr().out

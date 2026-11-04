@@ -3,7 +3,7 @@ from typing import List, Optional
 
 import typer
 
-from airfield.config import plans_dir, require_project_root
+from airfield.config import complete_plan_name, plan_names, require_project_root
 
 
 def _tmux_sessions() -> List[str]:
@@ -54,7 +54,9 @@ def _prune_containers() -> None:
 
 def run(
     plan_name: Optional[str] = typer.Argument(
-        None, help="Plan/session to tear down (default: every running session that matches a plan)"
+        None,
+        help="Plan/session to tear down (default: every running session that matches a plan)",
+        autocompletion=complete_plan_name,
     ),
     prune: bool = typer.Option(
         False,
@@ -77,9 +79,8 @@ def run(
         if not targets:
             print(f"No running tmux session named '{plan_name}'.")
     else:
-        p_dir = plans_dir(root)
-        plan_names = {p.stem for p in p_dir.glob("*.yaml")} if p_dir.exists() else set()
-        targets = [s for s in sessions if s in plan_names]
+        plans = set(plan_names(root))
+        targets = [s for s in sessions if s in plans]
         if not targets:
             print("No running plan sessions found.")
 

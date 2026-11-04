@@ -260,3 +260,21 @@ def dependency_search_paths(root: Path, target_device: str) -> List[Path]:
 
 def plans_dir(root: Path) -> Path:
     return root / "plans"
+
+
+def plan_names(root: Path) -> List[str]:
+    """The project's plans, by name: plans/<name>.yaml, sorted."""
+    p_dir = plans_dir(root)
+    return sorted(p.stem for p in p_dir.glob("*.yaml")) if p_dir.is_dir() else []
+
+
+def complete_plan_name(incomplete: str) -> List[str]:
+    """Tab completion for a plan argument: the plans of the project the shell
+    is in. Outside a project there are none, and the shell falls back to file
+    names."""
+    try:
+        root = find_project_root()
+        names = plan_names(root) if root is not None else []
+    except Exception:  # never print a traceback over the prompt
+        return []
+    return [name for name in names if name.startswith(incomplete)]

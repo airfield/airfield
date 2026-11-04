@@ -20,6 +20,11 @@ def run(
     target_device: str = typer.Option("arm64" if is_arm64() else "x86_64", "--target-device", help="Target architecture for dependency resolution"),
     test: bool = typer.Option(False, "--test", help="Run the package's 'test' run command instead of 'default'"),
 ):
+    """Run a package's default run command (test with --test).
+
+    With no default run command defined, opens an interactive shell in the
+    package's container instead.
+    """
     console.print(f"[dim]Loading package {package_name or '(auto)'}...[/dim]")
     pkg_dir, pkg, deps, source_root = resolve_package_context(package_name, target_device=target_device)
     image_name = build_package_image(pkg_dir, pkg, deps, target_device=target_device)
