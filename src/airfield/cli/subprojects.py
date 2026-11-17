@@ -111,6 +111,21 @@ def _get_remote_head(cwd: Path, upstream: str) -> Optional[str]:
     return None
 
 
+def _fetch(cwd: Path) -> None:
+    """Refresh the remote-tracking refs so ahead/behind reflect the remote.
+
+    Without this, `status` and `pull` compare against whatever the last fetch
+    left behind, and a package with new remote commits looks up to date.
+    A failed fetch (e.g. offline) is reported and the cached refs are used.
+    """
+    if _get_upstream(cwd) is None:
+        return
+    res = _run_git(["fetch", "--quiet"], cwd)
+    if res.returncode != 0:
+        details = (res.stderr or res.stdout).strip()
+        console.print(f"[yellow]Could not fetch {cwd.name}; using cached remote state[/yellow]: {details}")
+
+
 def _ahead_behind(cwd: Path) -> (int, int):
     # Returns (ahead, behind)
     res = _run_git(["rev-list", "--left-right", "--count", "HEAD...@{u}"], cwd)
@@ -190,6 +205,7 @@ def cmd_status():
     console.print(f"[bold]Subpackages status ({len(subprojects)} total)[/bold]\n")
     for sp in subprojects:
         dirty = _is_dirty(sp)
+        _fetch(sp)
         ahead, behind = _ahead_behind(sp)
         
         status_parts = []
@@ -340,6 +356,7 @@ def cmd_pull(
     affected = []
 
     for sp in subprojects:
+        _fetch(sp)
         _, behind = _ahead_behind(sp)
         if behind > 0:
             if _confirm(f"Pull {behind} commit(s) in {sp.name}?", auto):
