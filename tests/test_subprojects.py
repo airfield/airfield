@@ -186,6 +186,38 @@ def test_subprojects_pull_and_undo(cli_runner, temp_workspace):
     assert "behind 1" in status_result3.output
 
 
+
+def test_subprojects_pull_fetches_first(cli_runner, temp_workspace):
+    """status and pull see remote commits without a manual `git fetch`."""
+    cli_runner.invoke(app, ["project", "init", "."])
+    remote_repo = temp_workspace / "remote"
+    remote_repo.mkdir()
+    subprocess.run(["git", "init", "--bare"], cwd=remote_repo, check=True, capture_output=True)
+
+    sub1 = temp_workspace / "src" / "sub1"
+    sub1.mkdir(parents=True)
+    setup_git_repo(sub1)
+    subprocess.run(["git", "remote", "add", "origin", str(remote_repo)], cwd=sub1, check=True)
+    subprocess.run(["git", "push", "-u", "origin", "master"], cwd=sub1, check=True, capture_output=True)
+
+    other = temp_workspace / "other"
+    subprocess.run(["git", "clone", str(remote_repo), str(other)], check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=other, check=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=other, check=True)
+    (other / "file.txt").write_text("pulled\n")
+    subprocess.run(["git", "commit", "-am", "remote commit"], cwd=other, check=True, capture_output=True)
+    subprocess.run(["git", "push"], cwd=other, check=True, capture_output=True)
+
+    # No `git fetch` in sub1: the commands must fetch for themselves.
+    status_result = cli_runner.invoke(app, ["subpackages", "status"])
+    assert "behind 1" in status_result.output
+
+    pull_result = cli_runner.invoke(app, ["subpackages", "pull", "--auto"])
+    assert pull_result.exit_code == 0
+    assert "Pulled in sub1" in pull_result.output
+    assert (sub1 / "file.txt").read_text() == "pulled\n"
+
+
 import yaml
 
 def test_subprojects_track(cli_runner, temp_workspace):
